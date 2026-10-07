@@ -196,6 +196,103 @@ const SCHEMA = [
     created_by INTEGER,
     created_at TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS enquiries (
+    id SERIAL PRIMARY KEY,
+    form TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    fields TEXT DEFAULT '{}',
+    file_id INTEGER,
+    page TEXT DEFAULT '',
+    status TEXT DEFAULT 'new',
+    created_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS referrals (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    company TEXT DEFAULT '',
+    role TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    status TEXT DEFAULT 'submitted',
+    hr_note TEXT DEFAULT '',
+    reward TEXT DEFAULT '',
+    created_at TEXT,
+    updated_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS members (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    phone TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS points_ledger (
+    id SERIAL PRIMARY KEY,
+    member_id INTEGER NOT NULL,
+    points INTEGER NOT NULL,
+    kind TEXT DEFAULT 'adjustment',
+    reason TEXT DEFAULT '',
+    created_by INTEGER,
+    created_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS points_claims (
+    id SERIAL PRIMARY KEY,
+    member_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    details TEXT DEFAULT '{}',
+    status TEXT DEFAULT 'pending',
+    points INTEGER DEFAULT 0,
+    hr_note TEXT DEFAULT '',
+    created_at TEXT,
+    updated_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS redemptions (
+    id SERIAL PRIMARY KEY,
+    member_id INTEGER NOT NULL,
+    reward TEXT NOT NULL,
+    points INTEGER NOT NULL,
+    cash_amount DOUBLE PRECISION DEFAULT 0,
+    details TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending',
+    hr_note TEXT DEFAULT '',
+    created_at TEXT,
+    updated_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS chats (
+    id SERIAL PRIMARY KEY,
+    token TEXT UNIQUE NOT NULL,
+    name TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    page TEXT DEFAULT '',
+    status TEXT DEFAULT 'open',
+    last_visitor_msg TEXT DEFAULT '',
+    last_staff_msg TEXT DEFAULT '',
+    visitor_seen TEXT DEFAULT '',
+    staff_read TEXT DEFAULT '',
+    emailed_at TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    sender TEXT NOT NULL,
+    body TEXT NOT NULL,
+    staff_id INTEGER,
+    created_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS hits (
+    id SERIAL PRIMARY KEY,
+    key TEXT NOT NULL,
+    at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS hits_key_idx ON hits (key, at)`,
+  `CREATE INDEX IF NOT EXISTS chat_messages_chat_idx ON chat_messages (chat_id)`,
+  `CREATE INDEX IF NOT EXISTS ledger_member_idx ON points_ledger (member_id)`,
   `CREATE INDEX IF NOT EXISTS payroll_user_idx ON payroll (user_id)`,
   `CREATE INDEX IF NOT EXISTS reports_user_idx ON reports (user_id)`,
   `CREATE INDEX IF NOT EXISTS requests_user_idx ON requests (user_id)`,

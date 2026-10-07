@@ -1,7 +1,9 @@
 // Dé Pitch portal API — one Vercel function for the whole portal.
 // POST /api/portal  { action: "...", ...data }   (JSON, header X-Portal: 1)
 // GET  /api/portal?file=ID[&dl=1]               (download a document)
+import crypto from 'node:crypto';
 import { query, one } from './_lib/db.js';
+import { notify, sendEmail, layout, canEmailVisitors, escapeHtml, siteUrl } from './_lib/mail.js';
 import {
   hashPassword, verifyPassword, passwordProblem, tempPassword,
   signSession, readSession, getCookie, sessionCookie, clearCookie, apiKeyValid, safeEqual
@@ -77,22 +79,8 @@ async function saveFile(file, { owner_id = null, client_id = null, title, catego
 
 const FILE_COLS = 'id, owner_id, client_id, title, category, filename, mime, size, created_at';
 
-// Best-effort email alert to People Ops via FormSubmit (no account needed).
-async function notifyHR(subject, fields) {
-  if (process.env.NOTIFY_HR === 'off') return;
-  const to = process.env.NOTIFY_EMAIL || ADMIN_EMAIL;
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 3500);
-    await fetch(`https://formsubmit.co/ajax/${encodeURIComponent(to)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Referer: process.env.SITE_URL || 'https://www.depitchhq.com' },
-      body: JSON.stringify({ _subject: `Portal: ${subject}`, _template: 'table', ...fields, 'Open the portal': (process.env.SITE_URL || 'https://www.depitchhq.com') + '/portal' }),
-      signal: ctrl.signal
-    });
-    clearTimeout(t);
-  } catch (e) { /* alerts are optional */ }
-}
+// Email alert to People Ops (Resend if configured, otherwise FormSubmit).
+async function notifyHR(subject, fields) { await notify(subject, fields); }
 
 /* ================= request plumbing ================= */
 async function readBody(req) {
@@ -127,6 +115,7 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET') {
       const url = new URL(req.url, 'http://x');
+      if (url.searchParams.get('task') === 'sweep') { const n = await sweepChats(); return send(res, 200, { ok: true, emailed: n }); }
       const fileId = int(url.searchParams.get('file'));
       if (!fileId) return send(res, 404, { error: 'Not found' });
       const viaKey = apiKeyValid(req);
@@ -147,6 +136,11 @@ export default async function handler(req, res) {
     if (action === 'login') return await login(req, res, body);
     if (action === 'logout') return send(res, 200, { ok: true }, { 'Set-Cookie': clearCookie(req) });
     if (action === 'setup') return await setup(req, res, body);
+    if (action.startsWith('public.')) {
+      const pub = PUBLIC[action];
+      if (!pub) return send(res, 404, { error: 'Unknown action.' });
+      return send(res, 200, (await pub(req, body)) || { ok: true });
+    }
 
     const user = viaKey ? await apiUser() : await currentUser(req);
     if (!user) return send(res, 401, { error: 'Your session has ended. Please sign in again.' });
@@ -162,6 +156,7 @@ export default async function handler(req, res) {
     if (area === 'adm' && user.role !== 'admin') return send(res, 403, { error: 'Not allowed.' });
     if (area === 'cli' && !user.client_id) return send(res, 403, { error: 'Your account is not linked to a company yet. Contact People Ops.' });
 
+    if (area === 'adm') await sweepChats();
     const result = await fn(user, body);
     return send(res, 200, result || { ok: true });
   } catch (err) {
@@ -432,7 +427,11 @@ async function admOverview() {
     (SELECT COUNT(*)::int FROM invoices WHERE status = 'draft') AS invoices_draft,
     (SELECT COUNT(*)::int FROM invoices WHERE status = 'sent') AS invoices_unpaid,
     (SELECT COUNT(*)::int FROM users WHERE role = 'employee' AND active = TRUE) AS employees,
-    (SELECT COUNT(*)::int FROM clients WHERE active = TRUE) AS clients`);
+    (SELECT COUNT(*)::int FROM clients WHERE active = TRUE) AS clients,
+    (SELECT COUNT(*)::int FROM enquiries WHERE status = 'new') AS enquiries,
+    (SELECT COUNT(*)::int FROM chats WHERE status = 'open' AND last_visitor_msg > last_staff_msg) AS chats,
+    (SELECT COUNT(*)::int FROM referrals WHERE status = 'submitted') AS referrals,
+    (SELECT COUNT(*)::int FROM points_claims WHERE status = 'pending') + (SELECT COUNT(*)::int FROM redemptions WHERE status = 'pending') AS points`);
   return { counts: c };
 }
 
@@ -451,14 +450,16 @@ async function admCreateUser(admin, b) {
   if (!str(b.name)) fail(400, 'Name is required.');
   if (role === 'client' && !b.client_id) fail(400, 'Link the client user to a company.');
   if (await one(`SELECT id FROM users WHERE email = $1`, [e])) fail(400, 'Someone already uses that email.');
-  const temp = tempPassword();
+  const chosen = String(b.password || '');
+  if (chosen) { const problem = passwordProblem(chosen); if (problem) fail(400, 'Password: ' + problem); }
+  const temp = chosen || tempPassword();
   const f = userFields(b);
   const u = await one(
     `INSERT INTO users (email, role, password_hash, must_change, name, job_title, phone, employee_code, start_date, pay_currency, monthly_pay, bill_rate, bank_name, account_number, client_id, created_at)
-     VALUES ($1,$2,$3,TRUE,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
-    [e, role, hashPassword(temp), ...f, nowIso()]
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+    [e, role, hashPassword(temp), !chosen, ...f, nowIso()]
   );
-  return { id: u.id, tempPassword: temp };
+  return chosen ? { id: u.id, passwordSet: true } : { id: u.id, tempPassword: temp };
 }
 
 async function admUpdateUser(admin, b) {
@@ -737,6 +738,359 @@ async function admInvoice(admin, b) {
   return { invoice: { ...inv, items: json(inv.items) }, client };
 }
 
+/* ================= points programme ================= */
+// Edit these to change how many points each action earns and what points buy.
+const EARN = {
+  google_review: { label: 'Google review', points: 50 },
+  ref_cv: { label: 'Referral: CV revamp client', points: 300 },
+  ref_interview: { label: 'Referral: interview prep client', points: 600 },
+  ref_recruitment: { label: 'Referral: recruitment client', points: 3000 }
+};
+const REWARDS = {
+  interview_prep: { label: 'Interview preparation session', points: 1000 },
+  placement: { label: 'Placement service', points: 4000 },
+  cash: { label: 'Cash', min: 1000, nairaPerPoint: 5 }
+};
+const CHAT_EMAIL_AFTER_MIN = Number(process.env.CHAT_EMAIL_AFTER_MINUTES || 10);
+const FORMS_EMAIL = process.env.FORMS_EMAIL || 'office@depitchhq.com';
+
+function ipOf(req) { return String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim(); }
+async function limit(req, bucket, max, minutes) {
+  const key = `${bucket}:${ipOf(req)}`;
+  const since = new Date(Date.now() - minutes * 60000).toISOString();
+  const c = await one(`SELECT COUNT(*)::int AS n FROM hits WHERE key = $1 AND at > $2`, [key, since]);
+  if (Number(c.n) >= max) fail(429, 'Too many requests. Please wait a few minutes and try again.');
+  await query(`INSERT INTO hits (key, at) VALUES ($1, $2)`, [key, nowIso()]);
+  if (Math.random() < 0.05) await query(`DELETE FROM hits WHERE at < $1`, [new Date(Date.now() - 86400000).toISOString()]);
+}
+function normName(n) { return String(n || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+function namesMatch(a, b) {
+  const x = normName(a), y = normName(b);
+  return x === y || (x.split(' ')[0] && x.split(' ')[0] === y.split(' ')[0]);
+}
+async function balanceOf(memberId) {
+  const r = await one(`SELECT COALESCE(SUM(points), 0)::int AS b FROM points_ledger WHERE member_id = $1`, [memberId]);
+  return Number(r.b) || 0;
+}
+async function pendingRedeem(memberId) {
+  const r = await one(`SELECT COALESCE(SUM(points), 0)::int AS p FROM redemptions WHERE member_id = $1 AND status = 'pending'`, [memberId]);
+  return Number(r.p) || 0;
+}
+async function findMember(name, emailAddr) {
+  const m = await one(`SELECT * FROM members WHERE email = $1`, [emailAddr]);
+  if (!m || !namesMatch(m.name, name)) return null;
+  return m;
+}
+async function upsertMember(name, emailAddr, phone) {
+  const m = await one(`SELECT * FROM members WHERE email = $1`, [emailAddr]);
+  if (m) return m;
+  return one(`INSERT INTO members (name, email, phone, created_at) VALUES ($1,$2,$3,$4) RETURNING *`, [name, emailAddr, phone || '', nowIso()]);
+}
+function catalogue() {
+  return {
+    earn: Object.entries(EARN).map(([k, v]) => ({ key: k, label: v.label, points: v.points })),
+    rewards: [
+      { key: 'interview_prep', label: REWARDS.interview_prep.label, points: REWARDS.interview_prep.points },
+      { key: 'placement', label: REWARDS.placement.label, points: REWARDS.placement.points },
+      { key: 'cash', label: `Cash: every 1,000 points = ₦${(1000 * REWARDS.cash.nairaPerPoint).toLocaleString('en-NG')}`, points: REWARDS.cash.min }
+    ],
+    nairaPerPoint: REWARDS.cash.nairaPerPoint
+  };
+}
+
+async function sendPointsEmail(member, points, reason) {
+  if (!canEmailVisitors()) return false;
+  const balance = await balanceOf(member.id);
+  const first = String(member.name).split(' ')[0];
+  const rewards = catalogue().rewards.map((r) => {
+    const ok = balance >= r.points;
+    return `<tr><td style="padding:8px 10px;border-bottom:1px solid #e3e6e8">${escapeHtml(r.label)}</td><td style="padding:8px 10px;border-bottom:1px solid #e3e6e8;text-align:right;white-space:nowrap">${r.points.toLocaleString('en-NG')} pts</td>` +
+      `<td style="padding:8px 10px;border-bottom:1px solid #e3e6e8;color:${ok ? '#1f7a4d' : '#6b7178'};white-space:nowrap">${ok ? 'Available now' : (r.points - balance).toLocaleString('en-NG') + ' to go'}</td></tr>`;
+  }).join('');
+  const html = layout(`You just got ${points.toLocaleString('en-NG')} points!`, `
+    <p style="font-size:15px;line-height:1.6">Hi ${escapeHtml(first)}, thank you! You earned <b>${points.toLocaleString('en-NG')} points</b> for: ${escapeHtml(reason)}.</p>
+    <p style="font-size:15px">Your balance is now <b style="font-size:20px">${balance.toLocaleString('en-NG')} points</b>.</p>
+    <h3 style="margin:22px 0 8px;font-size:15px">What your points can get you</h3>
+    <table cellpadding="0" cellspacing="0" style="width:100%;font-size:14px;border-collapse:collapse">${rewards}</table>
+    <p style="font-size:14px;line-height:1.6;margin-top:18px">To check your points or redeem them, open the chat button on our website, choose <b>Points</b>, and enter your full name and email address.</p>
+    <p style="margin-top:20px"><a href="${siteUrl()}" style="background:#011D38;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none;display:inline-block">Visit depitchhq.com</a></p>`);
+  return sendEmail({ to: member.email, subject: `You just got ${points.toLocaleString('en-NG')} Dé Pitch points`, html, replyTo: ADMIN_EMAIL });
+}
+
+/* ---------- public (website) ---------- */
+async function pubForm(rq, b) {
+  if (b.hp) return { ok: true };
+  await limit(rq, 'form', 12, 10);
+  const form = req2(b.form, 'Form', 80);
+  const raw = b.fields && typeof b.fields === 'object' ? b.fields : {};
+  const fields = {};
+  for (const [k, v] of Object.entries(raw).slice(0, 30)) {
+    if (k.startsWith('_') || k === 'form' || k === 'page') continue;
+    const val = str(v, 3000);
+    if (val) fields[str(k, 60)] = val;
+  }
+  const pick = (re) => { const k = Object.keys(fields).find((x) => re.test(x)); return k ? fields[k] : ''; };
+  const name = pick(/name/i), mail = pick(/email/i), phone = pick(/phone/i);
+  if (!Object.keys(fields).length) fail(400, 'Please fill in the form.');
+  let fileId = null;
+  if (b.file && b.file.data) fileId = await saveFile(b.file, { title: `${form}: ${name || mail || 'website'}`, category: 'Website upload', uploaded_by: null });
+  const row = await one(`INSERT INTO enquiries (form, name, email, phone, fields, file_id, page, status, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'new',$8) RETURNING id`,
+    [form, name, mail, phone, JSON.stringify(fields), fileId, str(b.page, 200), nowIso()]);
+  await notify(`Website form: ${form}`, { ...fields, 'CV / file': fileId ? 'Uploaded. Open it in the portal under Website enquiries.' : '' }, FORMS_EMAIL);
+  return { ok: true, id: row.id };
+}
+
+function req2(v, label, max) { return req(v, label, max); }
+
+async function pubPoints(rq, b) {
+  await limit(rq, 'points', 30, 10);
+  const name = req(b.name, 'Full name', 120), e = email(b.email);
+  const m = await findMember(name, e);
+  if (!m) return { found: false, catalogue: catalogue() };
+  const balance = await balanceOf(m.id);
+  const pending = await pendingRedeem(m.id);
+  const history = await query(`SELECT points, reason, created_at FROM points_ledger WHERE member_id = $1 ORDER BY id DESC LIMIT 30`, [m.id]);
+  const claims = await query(`SELECT type, details, status, points, hr_note, created_at FROM points_claims WHERE member_id = $1 ORDER BY id DESC LIMIT 20`, [m.id]);
+  const redemptions = await query(`SELECT reward, points, cash_amount, status, hr_note, created_at FROM redemptions WHERE member_id = $1 ORDER BY id DESC LIMIT 20`, [m.id]);
+  return { found: true, name: m.name, balance, available: balance - pending, history, claims: claims.map((c) => ({ ...c, details: json(c.details, {}) })), redemptions, catalogue: catalogue() };
+}
+
+async function pubPointsClaim(rq, b) {
+  if (b.hp) return { ok: true };
+  await limit(rq, 'claim', 8, 30);
+  const name = req(b.name, 'Full name', 120), e = email(b.email);
+  const type = b.type === 'google_review' ? 'google_review' : b.type === 'referral' ? 'referral' : fail(400, 'Choose what you are claiming points for.');
+  let details;
+  if (type === 'google_review') {
+    details = { review_name: req(b.review_name, 'The name on your Google review', 120), review_link: str(b.review_link, 400), notes: str(b.notes, 1000) };
+  } else {
+    const svc = { cv: 'CV revamp', interview: 'Interview preparation', recruitment: 'Recruitment (company hiring)' }[b.ref_service];
+    if (!svc) fail(400, 'Choose the service the person needs.');
+    details = { ref_name: req(b.ref_name, 'Their full name', 120), ref_email: str(b.ref_email, 160), ref_phone: str(b.ref_phone, 40), ref_company: str(b.ref_company, 160), service: svc, service_key: b.ref_service, notes: str(b.notes, 1000) };
+    if (!details.ref_email && !details.ref_phone) fail(400, 'Add their email or phone number so we can reach them.');
+  }
+  const m = await upsertMember(name, e, str(b.phone, 40));
+  await query(`INSERT INTO points_claims (member_id, type, details, status, created_at, updated_at) VALUES ($1,$2,$3,'pending',$4,$4)`, [m.id, type, JSON.stringify(details), nowIso()]);
+  await notifyHR(type === 'google_review' ? `Points claim: Google review by ${name}` : `New referral from ${name}`, { Name: name, Email: e, ...Object.fromEntries(Object.entries(details).filter(([k]) => k !== 'service_key')) });
+  return { ok: true };
+}
+
+async function pubRedeem(rq, b) {
+  await limit(rq, 'redeem', 6, 30);
+  const name = req(b.name, 'Full name', 120), e = email(b.email);
+  const m = await findMember(name, e);
+  if (!m) fail(400, 'We could not find points for that name and email.');
+  const reward = REWARDS[b.reward] ? b.reward : fail(400, 'Choose a reward.');
+  const available = (await balanceOf(m.id)) - (await pendingRedeem(m.id));
+  let points, cash = 0, details = str(b.details, 600);
+  if (reward === 'cash') {
+    points = Math.floor(int(b.points) / 1000) * 1000;
+    if (points < REWARDS.cash.min) fail(400, 'Cash redemptions start at 1,000 points, in steps of 1,000.');
+    cash = points * REWARDS.cash.nairaPerPoint;
+    if (!details) fail(400, 'Add the bank name, account number and account name for the payment.');
+  } else points = REWARDS[reward].points;
+  if (points > available) fail(400, `You need ${points.toLocaleString('en-NG')} points for this. You have ${available.toLocaleString('en-NG')} available.`);
+  await query(`INSERT INTO redemptions (member_id, reward, points, cash_amount, details, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'pending',$6,$6)`, [m.id, reward, points, cash, details, nowIso()]);
+  await notifyHR(`Points redemption request from ${m.name}`, { Name: m.name, Email: m.email, Reward: REWARDS[reward].label, Points: points, 'Cash (₦)': cash || '', Details: details });
+  return { ok: true };
+}
+
+async function chatByToken(token) {
+  const t = str(token, 80);
+  if (t.length < 20) fail(404, 'Chat not found.');
+  const c = await one(`SELECT * FROM chats WHERE token = $1`, [t]);
+  if (!c) fail(404, 'Chat not found.');
+  return c;
+}
+async function chatMessages(chatId, after = 0) {
+  return query(`SELECT id, sender, body, created_at FROM chat_messages WHERE chat_id = $1 AND id > $2 ORDER BY id LIMIT 200`, [chatId, int(after)]);
+}
+
+async function pubChatStart(rq, b) {
+  if (b.hp) return { ok: true };
+  await limit(rq, 'chatstart', 5, 30);
+  const name = req(b.name, 'Your name', 120), e = email(b.email), msg = req(b.message, 'Message', 2000);
+  const token = crypto.randomBytes(24).toString('base64url');
+  const at = nowIso();
+  const c = await one(`INSERT INTO chats (token, name, email, page, status, last_visitor_msg, visitor_seen, created_at) VALUES ($1,$2,$3,$4,'open',$5,$5,$5) RETURNING id`, [token, name, e, str(b.page, 200), at]);
+  await query(`INSERT INTO chat_messages (chat_id, sender, body, created_at) VALUES ($1,'visitor',$2,$3)`, [c.id, msg, at]);
+  await sweepChats();
+  return { token, messages: await chatMessages(c.id) };
+}
+
+async function pubChatSend(rq, b) {
+  await limit(rq, 'chatsend', 40, 10);
+  const c = await chatByToken(b.token);
+  const msg = req(b.message, 'Message', 2000);
+  const at = nowIso();
+  await query(`INSERT INTO chat_messages (chat_id, sender, body, created_at) VALUES ($1,'visitor',$2,$3)`, [c.id, msg, at]);
+  await query(`UPDATE chats SET last_visitor_msg = $1, visitor_seen = $1, status = 'open' WHERE id = $2`, [at, c.id]);
+  await sweepChats();
+  return { messages: await chatMessages(c.id, b.after) };
+}
+
+async function pubChatPoll(rq, b) {
+  const c = await chatByToken(b.token);
+  await query(`UPDATE chats SET visitor_seen = $1 WHERE id = $2`, [nowIso(), c.id]);
+  if (Math.random() < 0.2) await sweepChats();
+  return { messages: await chatMessages(c.id, b.after), name: c.name, status: c.status };
+}
+
+// Email People Ops about chats nobody has answered for a while.
+async function sweepChats() {
+  const cutoff = new Date(Date.now() - CHAT_EMAIL_AFTER_MIN * 60000).toISOString();
+  const due = await query(
+    `SELECT * FROM chats WHERE status = 'open' AND last_visitor_msg > last_staff_msg AND last_visitor_msg < $1 AND emailed_at < last_visitor_msg ORDER BY id LIMIT 5`, [cutoff]);
+  let n = 0;
+  for (const c of due) {
+    await query(`UPDATE chats SET emailed_at = $1 WHERE id = $2`, [nowIso(), c.id]);
+    const msgs = (await chatMessages(c.id)).slice(-15);
+    const transcript = msgs.map((m) => `${m.sender === 'visitor' ? c.name : 'Dé Pitch'}: ${m.body}`).join('\n\n');
+    await notifyHR(`Unanswered website chat from ${c.name}`, { Name: c.name, Email: c.email, 'Waiting since': c.last_visitor_msg.replace('T', ' ').slice(0, 16) + ' UTC', Conversation: transcript, Reply: 'Open the portal → Live chat to reply. Your reply appears in their chat window.' });
+    n++;
+  }
+  return n;
+}
+
+/* ---------- employee referrals ---------- */
+async function empReferrals(u) {
+  return { rows: await query(`SELECT * FROM referrals WHERE user_id = $1 ORDER BY id DESC`, [u.id]) };
+}
+async function empSubmitReferral(u, b) {
+  const kind = b.kind === 'client' ? 'client' : b.kind === 'candidate' ? 'candidate' : fail(400, 'Choose who you are referring.');
+  const name = req(b.name, kind === 'client' ? 'Contact name' : 'Candidate name', 160);
+  const mail = str(b.email, 160), phone = str(b.phone, 40);
+  if (!mail && !phone) fail(400, 'Add an email or phone number.');
+  await query(`INSERT INTO referrals (user_id, kind, name, email, phone, company, role, notes, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'submitted',$9,$9)`,
+    [u.id, kind, name, mail, phone, str(b.company, 160), str(b.role, 160), str(b.notes, 2000), nowIso()]);
+  await notifyHR(`New ${kind} referral from ${u.name}`, { 'Referred by': u.name, Type: kind, Name: name, Email: mail, Phone: phone, Company: b.company || '', Role: b.role || '', Notes: b.notes || '' });
+  return { ok: true };
+}
+
+/* ---------- admin: enquiries, referrals, points, chat ---------- */
+async function admEnquiries(admin, b) {
+  const st = str(b.status, 20);
+  const rows = await query(`SELECT e.*, f.filename FROM enquiries e LEFT JOIN files f ON f.id = e.file_id ${st ? 'WHERE e.status = $1' : ''} ORDER BY e.id DESC LIMIT 500`, st ? [st] : []);
+  return { rows: rows.map((r) => ({ ...r, fields: json(r.fields, {}) })) };
+}
+async function admEnquiryStatus(admin, b) {
+  await query(`UPDATE enquiries SET status = $1 WHERE id = $2`, [b.status === 'handled' ? 'handled' : 'new', int(b.id)]);
+  return { ok: true };
+}
+async function admReferrals() {
+  return { rows: await query(`SELECT r.*, u.name AS employee FROM referrals r JOIN users u ON u.id = r.user_id ORDER BY r.id DESC LIMIT 500`) };
+}
+async function admUpdateReferral(admin, b) {
+  const status = ['submitted', 'contacted', 'in_progress', 'placed', 'signed', 'unsuccessful'].includes(b.status) ? b.status : fail(400, 'Choose a status.');
+  await query(`UPDATE referrals SET status = $1, hr_note = $2, reward = $3, updated_at = $4 WHERE id = $5`, [status, str(b.hr_note, 1000), str(b.reward, 200), nowIso(), int(b.id)]);
+  return { ok: true };
+}
+async function admPoints() {
+  const members = await query(`SELECT m.*, COALESCE((SELECT SUM(points) FROM points_ledger l WHERE l.member_id = m.id), 0)::int AS balance FROM members m ORDER BY m.id DESC LIMIT 500`);
+  const claims = await query(`SELECT c.*, m.name, m.email FROM points_claims c JOIN members m ON m.id = c.member_id ORDER BY (c.status = 'pending') DESC, c.id DESC LIMIT 300`);
+  const redemptions = await query(`SELECT r.*, m.name, m.email FROM redemptions r JOIN members m ON m.id = r.member_id ORDER BY (r.status = 'pending') DESC, r.id DESC LIMIT 300`);
+  return { members, claims: claims.map((c) => ({ ...c, details: json(c.details, {}) })), redemptions, catalogue: catalogue(), emailsOn: canEmailVisitors() };
+}
+async function awardTo(admin, member, points, kind, reason) {
+  await query(`INSERT INTO points_ledger (member_id, points, kind, reason, created_by, created_at) VALUES ($1,$2,$3,$4,$5,$6)`, [member.id, points, kind, reason, admin.id, nowIso()]);
+  return points > 0 ? sendPointsEmail(member, points, reason) : false;
+}
+async function admReviewClaim(admin, b) {
+  const c = await one(`SELECT * FROM points_claims WHERE id = $1`, [int(b.id)]);
+  if (!c) fail(404, 'Claim not found.');
+  if (c.status !== 'pending') fail(400, 'This claim has already been decided.');
+  const status = b.status === 'approved' ? 'approved' : b.status === 'declined' ? 'declined' : fail(400, 'Choose a decision.');
+  let emailed = false;
+  if (status === 'approved') {
+    const kind = EARN[b.kind] ? b.kind : fail(400, 'Choose what the points are for.');
+    const points = int(b.points) || EARN[kind].points;
+    if (points <= 0 || points > 100000) fail(400, 'Enter the points to award.');
+    const m = await one(`SELECT * FROM members WHERE id = $1`, [c.member_id]);
+    const d = json(c.details, {});
+    const reason = kind === 'google_review' ? 'Google review' : `Referred ${d.ref_name || 'a client'} (${EARN[kind].label.replace('Referral: ', '')})`;
+    emailed = await awardTo(admin, m, points, kind, reason);
+    await query(`UPDATE points_claims SET status = 'approved', points = $1, hr_note = $2, updated_at = $3 WHERE id = $4`, [points, str(b.hr_note, 500), nowIso(), c.id]);
+  } else {
+    await query(`UPDATE points_claims SET status = 'declined', hr_note = $1, updated_at = $2 WHERE id = $3`, [str(b.hr_note, 500), nowIso(), c.id]);
+  }
+  return { ok: true, emailed };
+}
+async function admAwardPoints(admin, b) {
+  const e = email(b.email);
+  const name = req(b.name, 'Name', 120);
+  const kind = EARN[b.kind] ? b.kind : 'adjustment';
+  const points = int(b.points) || (EARN[kind] ? EARN[kind].points : 0);
+  if (!points || Math.abs(points) > 100000) fail(400, 'Enter the points.');
+  const m = await upsertMember(name, e, '');
+  const reason = str(b.reason, 200) || (EARN[kind] ? EARN[kind].label : 'Points adjustment');
+  const emailed = await awardTo(admin, m, points, kind, reason);
+  return { ok: true, emailed };
+}
+async function admUpdateRedemption(admin, b) {
+  const r = await one(`SELECT * FROM redemptions WHERE id = $1`, [int(b.id)]);
+  if (!r) fail(404, 'Request not found.');
+  const status = ['pending', 'approved', 'fulfilled', 'declined'].includes(b.status) ? b.status : fail(400, 'Choose a status.');
+  const wasDeducted = r.status === 'approved' || r.status === 'fulfilled';
+  const deduct = status === 'approved' || status === 'fulfilled';
+  if (!wasDeducted && deduct) {
+    const bal = await balanceOf(r.member_id);
+    if (bal < r.points) fail(400, `Not enough points. Balance is ${bal}.`);
+    await query(`INSERT INTO points_ledger (member_id, points, kind, reason, created_by, created_at) VALUES ($1,$2,'redemption',$3,$4,$5)`,
+      [r.member_id, -r.points, `Redeemed: ${REWARDS[r.reward] ? REWARDS[r.reward].label : r.reward}${r.cash_amount ? ' (₦' + Number(r.cash_amount).toLocaleString('en-NG') + ')' : ''}`, admin.id, nowIso()]);
+  }
+  if (wasDeducted && !deduct) {
+    await query(`INSERT INTO points_ledger (member_id, points, kind, reason, created_by, created_at) VALUES ($1,$2,'refund','Redemption reversed',$3,$4)`, [r.member_id, r.points, admin.id, nowIso()]);
+  }
+  await query(`UPDATE redemptions SET status = $1, hr_note = $2, updated_at = $3 WHERE id = $4`, [status, str(b.hr_note, 500), nowIso(), r.id]);
+  return { ok: true };
+}
+async function admChats(admin, b) {
+  const rows = await query(`SELECT c.id, c.name, c.email, c.page, c.status, c.last_visitor_msg, c.last_staff_msg, c.visitor_seen, c.staff_read, c.created_at,
+      (SELECT body FROM chat_messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_body,
+      (SELECT COUNT(*)::int FROM chat_messages m WHERE m.chat_id = c.id AND m.sender = 'visitor' AND m.created_at > c.staff_read) AS unread
+    FROM chats c ORDER BY (c.status = 'open') DESC, GREATEST(c.last_visitor_msg, c.last_staff_msg) DESC LIMIT 200`);
+  return { rows };
+}
+async function admChat(admin, b) {
+  const c = await one(`SELECT * FROM chats WHERE id = $1`, [int(b.id)]);
+  if (!c) fail(404, 'Chat not found.');
+  await query(`UPDATE chats SET staff_read = $1 WHERE id = $2`, [nowIso(), c.id]);
+  const { token, ...safe } = c;
+  return { chat: safe, messages: await chatMessages(c.id, b.after), online: c.visitor_seen > new Date(Date.now() - 60000).toISOString() };
+}
+async function admChatReply(admin, b) {
+  const c = await one(`SELECT * FROM chats WHERE id = $1`, [int(b.id)]);
+  if (!c) fail(404, 'Chat not found.');
+  const msg = req(b.message, 'Reply', 3000);
+  const at = nowIso();
+  await query(`INSERT INTO chat_messages (chat_id, sender, body, staff_id, created_at) VALUES ($1,'staff',$2,$3,$4)`, [c.id, msg, admin.id, at]);
+  await query(`UPDATE chats SET last_staff_msg = $1, staff_read = $1, status = 'open' WHERE id = $2`, [at, c.id]);
+  let emailed = false;
+  const away = !c.visitor_seen || c.visitor_seen < new Date(Date.now() - 2 * 60000).toISOString();
+  if (away && c.email && canEmailVisitors()) {
+    emailed = await sendEmail({
+      to: c.email, replyTo: ADMIN_EMAIL, subject: 'Dé Pitch replied to your message',
+      html: layout('We replied to your message', `<p style="font-size:15px;line-height:1.6">Hi ${escapeHtml(String(c.name).split(' ')[0])},</p>
+        <div style="background:#f4f6f7;border-radius:8px;padding:14px 16px;font-size:15px;line-height:1.6;white-space:pre-wrap">${escapeHtml(msg)}</div>
+        <p style="font-size:14px;line-height:1.6;margin-top:16px">You can reply to this email, or continue the conversation in the chat on our website.</p>
+        <p><a href="${siteUrl()}" style="background:#011D38;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none;display:inline-block">Open depitchhq.com</a></p>`)
+    });
+  }
+  return { ok: true, emailed };
+}
+async function admChatStatus(admin, b) {
+  await query(`UPDATE chats SET status = $1 WHERE id = $2`, [b.status === 'closed' ? 'closed' : 'open', int(b.id)]);
+  return { ok: true };
+}
+async function admSettings() {
+  return { emailsOn: canEmailVisitors(), chatEmailAfter: CHAT_EMAIL_AFTER_MIN, formsEmail: FORMS_EMAIL };
+}
+
+const PUBLIC = {
+  'public.form': pubForm, 'public.points': pubPoints, 'public.pointsClaim': pubPointsClaim, 'public.redeem': pubRedeem,
+  'public.chatStart': pubChatStart, 'public.chatSend': pubChatSend, 'public.chatPoll': pubChatPoll
+};
+
 const ACTIONS = {
   'emp.dashboard': empDashboard, 'emp.payroll': empPayroll, 'emp.payslip': empPayslip,
   'emp.reports': empReports, 'emp.submitReport': empSubmitReport,
@@ -757,5 +1111,9 @@ const ACTIONS = {
   'adm.recruitment': admRecruitment, 'adm.updateRecruitment': admUpdateRecruitment,
   'adm.feedback': admFeedback, 'adm.updateFeedback': admUpdateFeedback,
   'adm.files': admFiles, 'adm.uploadDocument': admUploadDocument, 'adm.deleteFile': admDeleteFile,
+  'emp.referrals': empReferrals, 'emp.submitReferral': empSubmitReferral,
+  'adm.enquiries': admEnquiries, 'adm.enquiryStatus': admEnquiryStatus, 'adm.referrals': admReferrals, 'adm.updateReferral': admUpdateReferral,
+  'adm.points': admPoints, 'adm.reviewClaim': admReviewClaim, 'adm.awardPoints': admAwardPoints, 'adm.updateRedemption': admUpdateRedemption,
+  'adm.chats': admChats, 'adm.chat': admChat, 'adm.chatReply': admChatReply, 'adm.chatStatus': admChatStatus, 'adm.settings': admSettings,
   'adm.announcements': admAnnouncements, 'adm.saveAnnouncement': admSaveAnnouncement, 'adm.deleteAnnouncement': admDeleteAnnouncement
 };

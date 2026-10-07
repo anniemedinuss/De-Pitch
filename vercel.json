@@ -33,5 +33,11 @@
     "api/portal.js": {
       "maxDuration": 15
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/portal?task=sweep",
+      "schedule": "0 8 * * *"
+    }
+  ]
 }

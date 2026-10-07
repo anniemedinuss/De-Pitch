@@ -52,6 +52,21 @@ There is no public sign-up. People Ops creates every account and shares a tempor
 4. **Create the People Ops account.** Open `/portal`. The first visit shows "Set up the portal". Enter the `SETUP_KEY` and choose a password. This creates the account for peopleops@depitchhq.com.
 5. In the portal, add your **Clients** first, then add **People** (employees, client users and other admins).
 
+### Website chat, points and enquiries
+- **Website enquiries:** every website form is saved in the portal under **Website enquiries**, including uploaded CVs. It is also emailed to office@depitchhq.com. If the portal is ever down, the form falls back to FormSubmit email.
+- **Live chat:** visitors use the round chat button on every page. People Ops replies from **Live chat** in the portal, and the reply appears in the visitor's chat window. A message left unanswered for 10 minutes (change this with `CHAT_EMAIL_AFTER_MINUTES`) is emailed to People Ops. The check runs whenever someone uses the chat or the portal, plus once a day.
+- **Points & rewards:** in the chat window's *Points & rewards* tab, visitors enter their full name and email to see their points. They can claim points for a Google review (50) or for referring someone (CV revamp 300, interview prep 600, recruitment client 3,000). People Ops approves each claim in **Points & rewards**. Points can be redeemed for interview prep (1,000), placement (4,000) or cash (1,000 points = ₦5,000). To change these numbers, edit `EARN` and `REWARDS` in `api/portal.js`.
+- **Employee referrals:** employees refer clients or candidates from their **Referrals** tab, and People Ops updates them under **Referrals**.
+
+### Emails to visitors (points emails and chat replies): Resend
+Emails to people outside Dé Pitch need a sending service. FormSubmit can only email your own inboxes.
+1. Create a free account at resend.com. The free plan covers 3,000 emails a month.
+2. Add your domain `depitchhq.com` and add the DNS records Resend shows you at your domain registrar.
+3. Create an API key, then add it in Vercel as `RESEND_API_KEY`. Optionally also add `MAIL_FROM` = `Dé Pitch <hello@depitchhq.com>`.
+4. Redeploy.
+
+Once Resend is set up, people get an email whenever they earn points, and chat replies are emailed to visitors who have left the site. All portal alerts also switch to Resend, so no FormSubmit activation is needed for them.
+
 ### Email alerts to People Ops
 Every report, request, talent request and removal also emails peopleops@depitchhq.com through FormSubmit. The first alert sends an **Activate** email to that inbox, and you need to click it once. To turn alerts off, add `NOTIFY_HR` = `off`.
 

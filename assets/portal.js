@@ -67,7 +67,7 @@
 
   var PILL = {
     paid: 'ok', approved: 'ok', filled: 'ok', acknowledged: 'ok', active: 'ok',
-    pending: 'warn', submitted: 'warn', draft: 'warn', in_progress: 'info', sent: 'info', shortlist_sent: 'info',
+    pending: 'warn', submitted: 'warn', new: 'warn', contacted: 'info', placed: 'ok', signed: 'ok', unsuccessful: 'mute', fulfilled: 'ok', handled: 'mute', open: 'info', draft: 'warn', in_progress: 'info', sent: 'info', shortlist_sent: 'info',
     declined: 'bad', changes_requested: 'bad', closed: 'mute', inactive: 'mute'
   };
   var LABEL = { in_progress: 'in progress', shortlist_sent: 'shortlist sent', changes_requested: 'changes requested', time_off: 'time off', sent: 'awaiting payment' };
@@ -307,11 +307,11 @@
 
   /* ================= shell ================= */
   var NAV = {
-    employee: [['overview', 'Overview'], ['pay', 'Pay & payslips'], ['reports', 'Weekly reports'], ['requests', 'Requests'], ['documents', 'Documents']],
+    employee: [['overview', 'Overview'], ['pay', 'Pay & payslips'], ['reports', 'Weekly reports'], ['requests', 'Requests'], ['referrals', 'Referrals'], ['documents', 'Documents']],
     client: [['overview', 'Overview'], ['talents', 'Your talents'], ['invoices', 'Invoices'], ['recruitment', 'Request talent'], ['documents', 'Documents']],
-    admin: [['inbox', 'Inbox', 'inbox'], ['people', 'People'], ['clients', 'Clients'], ['payroll', 'Payroll', 'payroll_pending'], ['invoices', 'Invoices', 'invoices_draft'],
+    admin: [['inbox', 'Inbox', 'inbox'], ['chat', 'Live chat', 'chats'], ['enquiries', 'Website enquiries', 'enquiries'], ['people', 'People'], ['clients', 'Clients'], ['payroll', 'Payroll', 'payroll_pending'], ['invoices', 'Invoices', 'invoices_draft'],
       ['reports', 'Weekly reports', 'reports'], ['requests', 'Requests', 'requests'], ['recruitment', 'Talent requests', 'recruitment'],
-      ['feedback', 'Reviews & removals', 'feedback'], ['documents', 'Documents'], ['announcements', 'Announcements']]
+      ['feedback', 'Reviews & removals', 'feedback'], ['referrals', 'Referrals', 'referrals'], ['points', 'Points & rewards', 'points'], ['documents', 'Documents'], ['announcements', 'Announcements']]
   };
   var ROLE_LABEL = { employee: 'Employee', client: 'Client', admin: 'People Ops' };
 
@@ -323,7 +323,7 @@
 
   function countFor(key) {
     var c = S.counts || {};
-    if (key === 'inbox') return (c.reports || 0) + (c.requests || 0) + (c.recruitment || 0) + (c.feedback || 0);
+    if (key === 'inbox') return (c.reports || 0) + (c.requests || 0) + (c.recruitment || 0) + (c.feedback || 0) + (c.referrals || 0) + (c.points || 0);
     return c[key] || 0;
   }
 
@@ -818,7 +818,8 @@
     return '<form id="pf" class="stack">' +
       (u.id ? '' : '<div class="grid-2"><label class="field">Role<select name="role" id="pf-role"><option value="employee"' + (role === 'employee' ? ' selected' : '') + '>Employee / talent</option>' +
         '<option value="client"' + (role === 'client' ? ' selected' : '') + '>Client user</option><option value="admin"' + (role === 'admin' ? ' selected' : '') + '>People Ops admin</option></select></label>' +
-        '<label class="field">Email<input type="email" name="email" id="pf-email" required></label></div>') +
+        '<label class="field">Email<input type="email" name="email" id="pf-email" required></label></div>' +
+        '<label class="field">Password (optional)<input type="text" name="password" id="pf-password" autocomplete="off" placeholder="Leave empty to create a temporary password"><span class="hint">If you set one, share it with them privately. At least 10 characters with letters and numbers.</span></label>') +
       '<div class="grid-2"><label class="field">Full name<input name="name" id="pf-name" value="' + esc(u.name) + '" required></label>' +
       '<label class="field">Phone<input name="phone" id="pf-phone" value="' + esc(u.phone) + '"></label></div>' +
       '<div class="grid-2"><label class="field"><span data-lbl>' + (emp ? 'Placed with client' : 'Company') + '</span><select name="client_id" id="pf-client">' + clientOptions(u.client_id, true) + '</select></label>' +
@@ -866,6 +867,7 @@
       api(u ? 'adm.updateUser' : 'adm.createUser', d).then(function (j) {
         cache.users = null;
         if (j.tempPassword) { renderShell(); showTempPassword(d.name, d.email, j.tempPassword); }
+        else if (j.passwordSet) { after('Account created with the password you chose.')(); }
         else after('Saved.')();
       }).catch(errIn(m, '#pf-error'));
     };
@@ -1352,6 +1354,234 @@
     });
   };
 
+  /* ================= referrals (employee) ================= */
+  EMP.referrals = function (el) {
+    return api('emp.referrals').then(function (j) {
+      el.innerHTML = announceBar() + head('Referrals', 'Know a company that is hiring, or a great candidate? Refer them here. People Ops will update you as things progress.') +
+        '<div class="panel stack"><div class="seg" role="tablist"><button class="on" data-k="client" type="button">Refer a client</button><button data-k="candidate" type="button">Refer a candidate</button></div>' +
+        '<form id="rf" class="stack" novalidate><input type="hidden" name="kind" value="client">' +
+        '<div class="grid-2"><label class="field"><span data-l="name">Contact person</span><input name="name" id="rf-name" required></label>' +
+        '<label class="field"><span data-l="company">Company</span><input name="company" id="rf-company"></label></div>' +
+        '<div class="grid-3"><label class="field">Email<input type="email" name="email" id="rf-email"></label><label class="field">Phone<input name="phone" id="rf-phone"></label>' +
+        '<label class="field"><span data-l="role">Roles they are hiring for</span><input name="role" id="rf-role"></label></div>' +
+        '<label class="field">Notes<textarea name="notes" id="rf-notes" placeholder="How do you know them? Anything People Ops should know?"></textarea></label>' +
+        '<p class="error" id="rf-error"></p><div class="row" style="justify-content:flex-end"><button class="btn" type="submit">Send referral</button></div></form></div>' +
+        '<div class="panel"><div class="panel-head"><h2>Your referrals</h2></div>' +
+        table(['Sent', 'Type', 'Referral', 'Status', 'Update from People Ops'], j.rows.map(function (r) {
+          return '<tr><td>' + esc(fmtDate(r.created_at)) + '</td><td>' + esc(cap(r.kind)) + '</td><td><b>' + esc(r.name) + '</b><div class="small muted">' + esc([r.company, r.role].filter(Boolean).join(' · ')) + '</div></td>' +
+            '<td>' + pill(r.status) + '</td><td class="small">' + esc(r.hr_note) + (r.reward ? '<div><b>Reward:</b> ' + esc(r.reward) + '</div>' : '') + '</td></tr>';
+        }), 'No referrals yet.') + '</div>';
+      var form = $('#rf', el);
+      var labels = { client: ['Contact person', 'Company', 'Roles they are hiring for'], candidate: ['Candidate name', 'Current company (optional)', 'Role they want'] };
+      $$('.seg button', el).forEach(function (b) {
+        b.onclick = function () {
+          $$('.seg button', el).forEach(function (x) { x.classList.toggle('on', x === b); });
+          var k = b.getAttribute('data-k'); form.kind.value = k;
+          $('[data-l=name]', form).textContent = labels[k][0]; $('[data-l=company]', form).textContent = labels[k][1]; $('[data-l=role]', form).textContent = labels[k][2];
+        };
+      });
+      form.onsubmit = function (e) {
+        e.preventDefault(); var btn = form.querySelector('[type=submit]'); busy(btn, true, 'Sending…');
+        api('emp.submitReferral', formObj(form)).then(function () { toast('Referral sent to People Ops.'); renderShell(); })
+          .catch(function (x) { $('#rf-error').textContent = x.message; busy(btn, false); });
+      };
+    });
+  };
+
+  /* ================= admin: website enquiries ================= */
+  ADM.enquiries = function (el) {
+    var st = sessionStorage.getItem('dp_enq_status') || 'new';
+    return api('adm.enquiries', { status: st === 'all' ? '' : st }).then(function (j) {
+      el.innerHTML = head('Website enquiries', 'Every form sent from the website: consultations, CV revamps, interview prep, contact, collab and sign-ups.', '<button class="btn secondary" id="enq-csv" type="button">Download CSV</button>') +
+        '<div class="seg">' + [['new', 'New'], ['handled', 'Handled'], ['all', 'All']].map(function (f) { return '<button type="button" data-s="' + f[0] + '" class="' + (st === f[0] ? 'on' : '') + '">' + f[1] + '</button>'; }).join('') + '</div>' +
+        table(['Received', 'Form', 'From', 'Status', '>'], j.rows.map(function (r, i) {
+          return '<tr><td>' + esc(fmtDate(r.created_at)) + '<div class="small muted">' + esc(r.created_at.slice(11, 16)) + ' UTC</div></td><td><b>' + esc(r.form) + '</b></td><td>' + esc(r.name || '—') + '<div class="small muted">' + esc(r.email) + (r.phone ? ' · ' + esc(r.phone) : '') + '</div></td>' +
+            '<td>' + pill(r.status) + '</td><td><div class="actions"><button class="btn sm" data-e="' + i + '" type="button">Open</button></div></td></tr>';
+        }), 'No enquiries here.');
+      $$('[data-s]', el).forEach(function (b) { b.onclick = function () { sessionStorage.setItem('dp_enq_status', b.getAttribute('data-s')); renderShell(); }; });
+      $('#enq-csv', el).onclick = function () {
+        var keys = []; j.rows.forEach(function (r) { Object.keys(r.fields).forEach(function (k) { if (keys.indexOf(k) === -1) keys.push(k); }); });
+        var out = [['Received', 'Form', 'Status'].concat(keys).map(csvCell).join(',')].concat(j.rows.map(function (r) {
+          return [r.created_at, r.form, r.status].concat(keys.map(function (k) { return r.fields[k] || ''; })).map(csvCell).join(',');
+        }));
+        downloadText('Website enquiries.csv', '﻿' + out.join('\r\n'));
+      };
+      $$('[data-e]', el).forEach(function (b) {
+        b.onclick = function () {
+          var r = j.rows[Number(b.getAttribute('data-e'))];
+          var m = openModal({
+            title: r.form, body: '<dl class="kv"><dt>Received</dt><dd>' + esc(fmtDate(r.created_at)) + ' ' + esc(r.created_at.slice(11, 16)) + ' UTC</dd>' +
+              Object.keys(r.fields).map(function (k) { return '<dt>' + esc(cap(k.replace(/[-_]/g, ' '))) + '</dt><dd>' + esc(r.fields[k]) + '</dd>'; }).join('') +
+              (r.file_id ? '<dt>File</dt><dd>' + fileLink(r.file_id, r.filename || 'Open file') + '</dd>' : '') + (r.page ? '<dt>Page</dt><dd>' + esc(r.page) + '</dd>' : '') + '</dl>' +
+              (r.email ? '<p class="small"><a href="mailto:' + esc(r.email) + '">Email ' + esc(r.name || r.email) + '</a></p>' : ''),
+            foot: '<button class="btn secondary" data-close type="button">Close</button>' + (r.status === 'new' ? '<button class="btn ok" id="enq-done" type="button">Mark as handled</button>' : '<button class="btn secondary" id="enq-new" type="button">Move back to new</button>')
+          });
+          var bt = $('#enq-done', m) || $('#enq-new', m);
+          bt.onclick = function () { api('adm.enquiryStatus', { id: r.id, status: r.status === 'new' ? 'handled' : 'new' }).then(after('Updated.')); };
+        };
+      });
+    });
+  };
+
+  /* ================= admin: referrals ================= */
+  ADM.referrals = function (el) {
+    return api('adm.referrals').then(function (j) {
+      el.innerHTML = head('Employee referrals', 'Clients and candidates referred by employees. Update the status as they progress. Employees see your updates.') +
+        table(['Sent', 'Employee', 'Type', 'Referral', 'Status', '>'], j.rows.map(function (r, i) {
+          return '<tr><td>' + esc(fmtDate(r.created_at)) + '</td><td><b>' + esc(r.employee) + '</b></td><td>' + esc(cap(r.kind)) + '</td><td><b>' + esc(r.name) + '</b><div class="small muted">' +
+            esc([r.company, r.role, r.email, r.phone].filter(Boolean).join(' · ')) + '</div></td><td>' + pill(r.status) + '</td><td><div class="actions"><button class="btn sm" data-r="' + i + '" type="button">Update</button></div></td></tr>';
+        }), 'No referrals yet.') +
+        '<p class="small muted">Referrals from website visitors and clients (for points) are under <a href="#/points">Points &amp; rewards</a>.</p>';
+      $$('[data-r]', el).forEach(function (b) {
+        b.onclick = function () {
+          var r = j.rows[Number(b.getAttribute('data-r'))];
+          var m = openModal({
+            title: r.name + ' · referred by ' + r.employee,
+            body: '<dl class="kv"><dt>Type</dt><dd>' + esc(cap(r.kind)) + '</dd><dt>Email</dt><dd>' + esc(r.email || '—') + '</dd><dt>Phone</dt><dd>' + esc(r.phone || '—') + '</dd>' +
+              '<dt>Company</dt><dd>' + esc(r.company || '—') + '</dd><dt>Role</dt><dd>' + esc(r.role || '—') + '</dd><dt>Notes</dt><dd>' + esc(r.notes || '—') + '</dd></dl>' +
+              '<div class="grid-2"><label class="field">Status<select id="ru-st">' + [['submitted', 'New'], ['contacted', 'Contacted'], ['in_progress', 'In progress'], ['placed', 'Placed (candidate)'], ['signed', 'Signed (client)'], ['unsuccessful', 'Unsuccessful']].map(function (s) {
+                return '<option value="' + s[0] + '"' + (r.status === s[0] ? ' selected' : '') + '>' + s[1] + '</option>'; }).join('') + '</select></label>' +
+              '<label class="field">Reward for the employee (optional)<input id="ru-rw" value="' + esc(r.reward) + '" placeholder="e.g. ₦50,000 bonus in November pay"></label></div>' +
+              '<label class="field">Update for the employee<textarea id="ru-note">' + esc(r.hr_note) + '</textarea></label><p class="error" id="ru-err"></p>',
+            foot: '<button class="btn secondary" data-close type="button">Cancel</button><button class="btn" id="ru-save" type="button">Save</button>'
+          });
+          $('#ru-save', m).onclick = function () { busy(this, true); api('adm.updateReferral', { id: r.id, status: $('#ru-st', m).value, reward: $('#ru-rw', m).value, hr_note: $('#ru-note', m).value }).then(after('Referral updated.')).catch(errIn(m, '#ru-err')); };
+        };
+      });
+    });
+  };
+
+  /* ================= admin: points & rewards ================= */
+  ADM.points = function (el) {
+    return api('adm.points').then(function (j) {
+      var cat = j.catalogue;
+      var earnOpts = cat.earn.map(function (e) { return '<option value="' + e.key + '" data-p="' + e.points + '">' + esc(e.label) + ' (' + e.points + ')</option>'; }).join('');
+      var pendC = j.claims.filter(function (c) { return c.status === 'pending'; }).length, pendR = j.redemptions.filter(function (r) { return r.status === 'pending'; }).length;
+      el.innerHTML = head('Points & rewards', 'Website visitors and clients earn points for Google reviews and referrals, and redeem them for services or cash.', '<button class="btn" id="pt-award" type="button">+ Award points</button>') +
+        (j.emailsOn ? '' : '<div class="announce"><span class="tag">Setup</span><span>Points emails to members are off until you add a <b>RESEND_API_KEY</b> in Vercel. See the README. Points still show in the website chat.</span></div>') +
+        '<div class="stats"><div class="stat hero"><span class="label">Claims to review</span><span class="value">' + pendC + '</span></div><div class="stat"><span class="label">Redemptions to handle</span><span class="value">' + pendR + '</span></div>' +
+        '<div class="stat"><span class="label">Members</span><span class="value">' + j.members.length + '</span></div></div>' +
+        '<div class="panel"><div class="panel-head"><h2>Claims (reviews and referrals)</h2></div>' + table(['Sent', 'Member', 'Claim', 'Status', '>'], j.claims.map(function (c, i) {
+          var d = c.details;
+          var what = c.type === 'google_review' ? 'Google review as "' + esc(d.review_name) + '"' + (d.review_link ? ' · <a href="' + esc(d.review_link) + '" target="_blank" rel="noopener">link</a>' : '')
+            : 'Referred <b>' + esc(d.ref_name) + '</b> for ' + esc(d.service) + '<div class="small muted">' + esc([d.ref_email, d.ref_phone, d.ref_company].filter(Boolean).join(' · ')) + '</div>';
+          return '<tr><td>' + esc(fmtDate(c.created_at)) + '</td><td><b>' + esc(c.name) + '</b><div class="small muted">' + esc(c.email) + '</div></td><td>' + what + '</td><td>' + pill(c.status) + (c.points ? ' <span class="small">+' + c.points + '</span>' : '') +
+            '</td><td><div class="actions">' + (c.status === 'pending' ? '<button class="btn sm" data-c="' + i + '" type="button">Review</button>' : '') + '</div></td></tr>';
+        }), 'No claims yet.') + '</div>' +
+        '<div class="panel"><div class="panel-head"><h2>Redemption requests</h2></div>' + table(['Sent', 'Member', 'Reward', '>Points', 'Status', '>'], j.redemptions.map(function (r, i) {
+          var label = (cat.rewards.filter(function (x) { return x.key === r.reward; })[0] || {}).label || r.reward;
+          return '<tr><td>' + esc(fmtDate(r.created_at)) + '</td><td><b>' + esc(r.name) + '</b><div class="small muted">' + esc(r.email) + '</div></td><td>' + esc(r.reward === 'cash' ? 'Cash ' + money(r.cash_amount, 'NGN') : label) +
+            (r.details ? '<div class="small muted">' + esc(r.details) + '</div>' : '') + '</td><td class="r">' + Number(r.points).toLocaleString() + '</td><td>' + pill(r.status) + '</td><td><div class="actions"><button class="btn sm secondary" data-rd="' + i + '" type="button">Update</button></div></td></tr>';
+        }), 'No redemption requests yet.') + '</div>' +
+        '<div class="panel"><div class="panel-head"><h2>Members</h2></div>' + table(['Name', 'Email', '>Balance', 'Joined'], j.members.map(function (m) {
+          return '<tr><td><b>' + esc(m.name) + '</b></td><td>' + esc(m.email) + '</td><td class="r"><b>' + Number(m.balance).toLocaleString() + '</b></td><td>' + esc(fmtDate(m.created_at)) + '</td></tr>';
+        }), 'No members yet.') + '</div>' +
+        '<div class="panel"><h2>Points rules</h2><div class="grid-2" style="margin-top:10px"><div>' + table(['Earn', '>Points'], cat.earn.map(function (e) { return '<tr><td>' + esc(e.label) + '</td><td class="r">' + e.points.toLocaleString() + '</td></tr>'; })) +
+        '</div><div>' + table(['Redeem', '>Points'], cat.rewards.map(function (r) { return '<tr><td>' + esc(r.label) + '</td><td class="r">' + r.points.toLocaleString() + '</td></tr>'; })) + '</div></div></div>';
+      $('#pt-award', el).onclick = function () {
+        var m = openModal({
+          title: 'Award points', body: '<form id="aw" class="stack"><div class="grid-2"><label class="field">Full name<input name="name" id="aw-name" required></label><label class="field">Email<input type="email" name="email" id="aw-email" required></label></div>' +
+            '<div class="grid-2"><label class="field">For<select name="kind" id="aw-kind">' + earnOpts + '<option value="adjustment">Other / adjustment</option></select></label><label class="field">Points<input type="number" name="points" id="aw-pts" value="' + cat.earn[0].points + '"></label></div>' +
+            '<label class="field">Reason shown to them (optional)<input name="reason" id="aw-reason"></label><p class="small muted">' + (j.emailsOn ? 'They will get an email about their new points.' : 'Emails are off until RESEND_API_KEY is added.') + '</p><p class="error" id="aw-err"></p></form>',
+          foot: '<button class="btn secondary" data-close type="button">Cancel</button><button class="btn" id="aw-save" type="button">Award points</button>'
+        });
+        $('#aw-kind', m).onchange = function () { var o = this.selectedOptions[0]; if (o.dataset.p) $('#aw-pts', m).value = o.dataset.p; };
+        $('#aw-save', m).onclick = function () { busy(this, true); api('adm.awardPoints', formObj($('#aw', m))).then(function (r) { closeModal(); toast(r.emailed ? 'Points awarded and email sent.' : 'Points awarded.'); refreshCounts(); renderShell(); }).catch(errIn(m, '#aw-err')); };
+      };
+      $$('[data-c]', el).forEach(function (b) {
+        b.onclick = function () {
+          var c = j.claims[Number(b.getAttribute('data-c'))], d = c.details;
+          var def = c.type === 'google_review' ? 'google_review' : ({ cv: 'ref_cv', interview: 'ref_interview', recruitment: 'ref_recruitment' }[d.service_key] || 'ref_cv');
+          var m = openModal({
+            title: (c.type === 'google_review' ? 'Google review claim: ' : 'Referral from ') + c.name,
+            body: '<dl class="kv"><dt>Member</dt><dd>' + esc(c.name) + ' (' + esc(c.email) + ')</dd>' + Object.keys(d).filter(function (k) { return k !== 'service_key' && d[k]; }).map(function (k) {
+              return '<dt>' + esc(cap(k.replace(/_/g, ' '))) + '</dt><dd>' + esc(d[k]) + '</dd>'; }).join('') + '</dl>' +
+              '<p class="small muted">' + (c.type === 'google_review' ? 'Check the review is on Google before approving.' : 'Approve once the referred person has paid for the service.') + '</p>' +
+              '<div class="grid-2"><label class="field">Award for<select id="cl-kind">' + earnOpts.replace('value="' + def + '"', 'value="' + def + '" selected') + '</select></label><label class="field">Points<input type="number" id="cl-pts" value="' + ((cat.earn.filter(function (e) { return e.key === def; })[0] || {}).points || 0) + '"></label></div>' +
+              '<label class="field">Note (optional)<input id="cl-note"></label><p class="error" id="cl-err"></p>',
+            foot: '<button class="btn danger" data-d="declined" type="button">Decline</button><button class="btn ok" data-d="approved" type="button">Approve and award points</button>'
+          });
+          $('#cl-kind', m).onchange = function () { $('#cl-pts', m).value = this.selectedOptions[0].dataset.p; };
+          $$('[data-d]', m).forEach(function (x) {
+            x.onclick = function () { busy(x, true); api('adm.reviewClaim', { id: c.id, status: x.getAttribute('data-d'), kind: $('#cl-kind', m).value, points: $('#cl-pts', m).value, hr_note: $('#cl-note', m).value })
+              .then(function (r) { closeModal(); toast(r.emailed ? 'Points awarded and email sent.' : 'Saved.'); refreshCounts(); renderShell(); }).catch(errIn(m, '#cl-err')); };
+          });
+        };
+      });
+      $$('[data-rd]', el).forEach(function (b) {
+        b.onclick = function () {
+          var r = j.redemptions[Number(b.getAttribute('data-rd'))];
+          var m = openModal({
+            title: 'Redemption: ' + r.name,
+            body: '<dl class="kv"><dt>Member</dt><dd>' + esc(r.name) + ' (' + esc(r.email) + ')</dd><dt>Reward</dt><dd>' + esc(r.reward === 'cash' ? 'Cash ' + money(r.cash_amount, 'NGN') : r.reward.replace('_', ' ')) + '</dd><dt>Points</dt><dd>' + Number(r.points).toLocaleString() + '</dd>' +
+              (r.details ? '<dt>Details</dt><dd>' + esc(r.details) + '</dd>' : '') + '</dl><p class="small muted">Points are taken from their balance when you approve.</p>' +
+              '<div class="grid-2"><label class="field">Status<select id="rd-st">' + [['pending', 'Waiting'], ['approved', 'Approved'], ['fulfilled', 'Fulfilled (paid or delivered)'], ['declined', 'Declined']].map(function (s) { return '<option value="' + s[0] + '"' + (r.status === s[0] ? ' selected' : '') + '>' + s[1] + '</option>'; }).join('') + '</select></label>' +
+              '<label class="field">Note<input id="rd-note" value="' + esc(r.hr_note) + '"></label></div><p class="error" id="rd-err"></p>',
+            foot: '<button class="btn secondary" data-close type="button">Cancel</button><button class="btn" id="rd-save" type="button">Save</button>'
+          });
+          $('#rd-save', m).onclick = function () { busy(this, true); api('adm.updateRedemption', { id: r.id, status: $('#rd-st', m).value, hr_note: $('#rd-note', m).value }).then(after('Redemption updated.')).catch(errIn(m, '#rd-err')); };
+        };
+      });
+    });
+  };
+
+  /* ================= admin: live chat ================= */
+  var chatTimer = null;
+  ADM.chat = function (el) {
+    clearTimeout(chatTimer);
+    var openId = Number(sessionStorage.getItem('dp_chat_open') || 0);
+    var lastMsg = 0;
+    return api('adm.chats').then(function (j) {
+      el.innerHTML = head('Live chat', 'Messages from the chat button on the website. Your replies appear in the visitor\'s chat window. If a message waits too long, it is emailed to People Ops.') +
+        '<div class="chat-admin"><div class="chat-list panel" id="cl"></div><div class="chat-view panel" id="cv"><p class="empty">Choose a conversation.</p></div></div>';
+      function drawList(rows) {
+        $('#cl', el).innerHTML = rows.length ? rows.map(function (c) {
+          var waiting = c.last_visitor_msg > c.last_staff_msg && c.status === 'open';
+          return '<button type="button" class="chat-item' + (c.id === openId ? ' on' : '') + '" data-id="' + c.id + '"><span class="spread"><b>' + esc(c.name) + '</b>' + (c.unread ? '<span class="count">' + c.unread + '</span>' : (waiting ? pill('pending', 'waiting') : (c.status === 'closed' ? pill('closed') : ''))) + '</span>' +
+            '<span class="small muted">' + esc(c.email) + '</span><span class="small">' + esc((c.last_body || '').slice(0, 70)) + '</span></button>';
+        }).join('') : '<p class="empty">No conversations yet.</p>';
+        $$('.chat-item', el).forEach(function (b) { b.onclick = function () { openId = Number(b.getAttribute('data-id')); sessionStorage.setItem('dp_chat_open', openId); lastMsg = 0; drawList(rows); loadChat(true); }; });
+      }
+      function loadChat(full) {
+        if (!openId) return Promise.resolve();
+        return api('adm.chat', { id: openId, after: full ? 0 : lastMsg }).then(function (c) {
+          var cv = $('#cv', el); if (!cv) return;
+          if (full || !$('.chat-thread', cv)) {
+            cv.innerHTML = '<div class="spread"><div><b>' + esc(c.chat.name) + '</b> <span class="small muted">' + esc(c.chat.email) + '</span><div class="small muted" id="cv-on"></div></div>' +
+              '<button class="btn sm secondary" id="cv-close" type="button">' + (c.chat.status === 'closed' ? 'Reopen' : 'Mark as done') + '</button></div>' +
+              '<div class="chat-thread" id="ct"></div><form id="cv-form" class="chat-reply"><textarea id="cv-msg" rows="2" placeholder="Write a reply" aria-label="Reply" required></textarea><button class="btn" type="submit">Send reply</button></form>';
+            $('#cv-close', cv).onclick = function () { api('adm.chatStatus', { id: openId, status: c.chat.status === 'closed' ? 'open' : 'closed' }).then(function () { renderShell(); }); };
+            $('#cv-msg', cv).addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#cv-form button', cv).click(); } });
+            $('#cv-form', cv).onsubmit = function (e) {
+              e.preventDefault(); var ta = $('#cv-msg', cv), btn = this.querySelector('button'); if (!ta.value.trim()) return; busy(btn, true, 'Sending…');
+              api('adm.chatReply', { id: openId, message: ta.value }).then(function (r) { ta.value = ''; if (r.emailed) toast('They had left the site, so your reply was also emailed to them.'); return loadChat(false); })
+                .catch(function (x) { toast(x.message, true); }).finally(function () { busy(btn, false); ta.focus(); });
+            };
+          }
+          $('#cv-on', cv).textContent = c.online ? 'On the website now' : 'Not on the website right now';
+          var ct = $('#ct', cv);
+          c.messages.forEach(function (msg) {
+            if (msg.id <= lastMsg) return; lastMsg = msg.id;
+            var d = document.createElement('div');
+            d.className = 'bubble ' + (msg.sender === 'staff' ? 'me' : 'them');
+            d.innerHTML = '<span class="small">' + (msg.sender === 'staff' ? 'You' : esc(c.chat.name)) + ' · ' + esc(fmtDate(msg.created_at)) + ' ' + esc(new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) + '</span><p>' + esc(msg.body) + '</p>';
+            ct.appendChild(d);
+          });
+          ct.scrollTop = ct.scrollHeight;
+        });
+      }
+      drawList(j.rows);
+      loadChat(true);
+      function tick() {
+        chatTimer = setTimeout(function () {
+          if (currentTab() !== 'chat' || !$('#cl', el)) return;
+          Promise.all([api('adm.chats'), loadChat(false)]).then(function (r) { if (!document.activeElement || document.activeElement.id !== 'cv-msg' || true) { var keep = $('#cl', el); if (keep) drawList(r[0].rows); } refreshCounts(); }).finally(tick);
+        }, 6000);
+      }
+      tick();
+    });
+  };
+
   var VIEWS = { employee: EMP, client: CLI, admin: ADM };
 
   /* ================= boot ================= */
@@ -1379,6 +1609,7 @@
     var side = document.getElementById('side');
     if (side && side.classList.contains('open') && !side.contains(e.target) && !e.target.closest('#menu-btn')) side.classList.remove('open');
   });
+  setInterval(function () { if (S.user && S.user.role === 'admin' && !S.user.must_change && document.getElementById('side')) refreshCounts(); }, 30000);
   window.addEventListener('hashchange', function () { if (S.user && !S.user.must_change) renderShell(); });
   boot();
 })();

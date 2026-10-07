@@ -227,3 +227,21 @@ dialog::backdrop { background: rgba(1, 15, 30, .5); }
 @media (max-width: 560px) { .kv { grid-template-columns: 1fr; } .kv dd { margin-bottom: 6px; } }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* live chat (People Ops) */
+.chat-admin { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .chat-admin { grid-template-columns: 1fr; } }
+.chat-list { padding: 8px; display: grid; gap: 4px; max-height: 70vh; overflow-y: auto; }
+.chat-item { text-align: left; background: #fff; border: 1px solid transparent; border-radius: 9px; padding: 10px 12px; display: grid; gap: 3px; cursor: pointer; font: inherit; color: inherit; }
+.chat-item:hover { background: var(--wash); }
+.chat-item.on { border-color: var(--navy); background: var(--sage-soft); }
+.chat-item .count { font-size: .72rem; font-weight: 700; background: var(--navy); color: #fff; border-radius: 999px; padding: 1px 7px; }
+.chat-view { display: grid; gap: 12px; min-height: 420px; grid-template-rows: auto 1fr auto; }
+.chat-thread { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; padding: 6px 2px; }
+.bubble { max-width: 75%; padding: 9px 12px; border-radius: 12px; font-size: .92rem; }
+.bubble p { white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
+.bubble .small { opacity: .75; font-size: .72rem; }
+.bubble.them { align-self: flex-start; background: var(--wash); border-bottom-left-radius: 4px; }
+.bubble.me { align-self: flex-end; background: var(--navy); color: #fff; border-bottom-right-radius: 4px; }
+.chat-reply { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+.chat-reply textarea { width: 100%; padding: .65rem .8rem; border: 1px solid #cfd4d8; border-radius: 8px; font: inherit; resize: vertical; }

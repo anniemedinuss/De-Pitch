@@ -4,6 +4,7 @@
 import crypto from 'node:crypto';
 import { query, one } from './_lib/db.js';
 import { notify, sendEmail, layout, canEmailVisitors, escapeHtml, siteUrl } from './_lib/mail.js';
+import { pointsEmailHtml } from './_lib/points-email.js';
 import {
   hashPassword, verifyPassword, passwordProblem, tempPassword,
   signSession, readSession, getCookie, sessionCookie, clearCookie, apiKeyValid, safeEqual
@@ -803,22 +804,17 @@ function catalogue() {
   };
 }
 
+function assetBase() {
+  // Where email images and links point. Uses the live Vercel address until depitchhq.com is connected.
+  if (process.env.EMAIL_ASSET_URL) return process.env.EMAIL_ASSET_URL.replace(/\/$/, '');
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  return siteUrl();
+}
 async function sendPointsEmail(member, points, reason) {
   if (!canEmailVisitors()) return false;
   const balance = await balanceOf(member.id);
-  const first = String(member.name).split(' ')[0];
-  const rewards = catalogue().rewards.map((r) => {
-    const ok = balance >= r.points;
-    return `<tr><td style="padding:8px 10px;border-bottom:1px solid #e3e6e8">${escapeHtml(r.label)}</td><td style="padding:8px 10px;border-bottom:1px solid #e3e6e8;text-align:right;white-space:nowrap">${r.points.toLocaleString('en-NG')} pts</td>` +
-      `<td style="padding:8px 10px;border-bottom:1px solid #e3e6e8;color:${ok ? '#1f7a4d' : '#6b7178'};white-space:nowrap">${ok ? 'Available now' : (r.points - balance).toLocaleString('en-NG') + ' to go'}</td></tr>`;
-  }).join('');
-  const html = layout(`You just got ${points.toLocaleString('en-NG')} points!`, `
-    <p style="font-size:15px;line-height:1.6">Hi ${escapeHtml(first)}, thank you! You earned <b>${points.toLocaleString('en-NG')} points</b> for: ${escapeHtml(reason)}.</p>
-    <p style="font-size:15px">Your balance is now <b style="font-size:20px">${balance.toLocaleString('en-NG')} points</b>.</p>
-    <h3 style="margin:22px 0 8px;font-size:15px">What your points can get you</h3>
-    <table cellpadding="0" cellspacing="0" style="width:100%;font-size:14px;border-collapse:collapse">${rewards}</table>
-    <p style="font-size:14px;line-height:1.6;margin-top:18px">To check your points or redeem them, open the chat button on our website, choose <b>Points</b>, and enter your full name and email address.</p>
-    <p style="margin-top:20px"><a href="${siteUrl()}" style="background:#011D38;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none;display:inline-block">Visit depitchhq.com</a></p>`);
+  const base = assetBase();
+  const html = pointsEmailHtml({ firstName: String(member.name).split(' ')[0], points, reason, balance, assetBase: base, siteLink: base + '/?points=1', nairaPerPoint: REWARDS.cash.nairaPerPoint });
   return sendEmail({ to: member.email, subject: `You just got ${points.toLocaleString('en-NG')} Dé Pitch points`, html, replyTo: ADMIN_EMAIL });
 }
 
@@ -996,9 +992,14 @@ async function admPoints() {
   const redemptions = await query(`SELECT r.*, m.name, m.email FROM redemptions r JOIN members m ON m.id = r.member_id ORDER BY (r.status = 'pending') DESC, r.id DESC LIMIT 300`);
   return { members, claims: claims.map((c) => ({ ...c, details: json(c.details, {}) })), redemptions, catalogue: catalogue(), emailsOn: canEmailVisitors() };
 }
-async function awardTo(admin, member, points, kind, reason) {
+function thanksFor(kind, custom) {
+  if (kind === 'google_review') return 'your Google review';
+  if (kind && kind.startsWith('ref_')) return 'your referral';
+  return custom ? custom.charAt(0).toLowerCase() + custom.slice(1) : 'being part of Dé Pitch rewards';
+}
+async function awardTo(admin, member, points, kind, reason, emailReason) {
   await query(`INSERT INTO points_ledger (member_id, points, kind, reason, created_by, created_at) VALUES ($1,$2,$3,$4,$5,$6)`, [member.id, points, kind, reason, admin.id, nowIso()]);
-  return points > 0 ? sendPointsEmail(member, points, reason) : false;
+  return points > 0 ? sendPointsEmail(member, points, emailReason || thanksFor(kind, reason)) : false;
 }
 async function admReviewClaim(admin, b) {
   const c = await one(`SELECT * FROM points_claims WHERE id = $1`, [int(b.id)]);
@@ -1013,7 +1014,8 @@ async function admReviewClaim(admin, b) {
     const m = await one(`SELECT * FROM members WHERE id = $1`, [c.member_id]);
     const d = json(c.details, {});
     const reason = kind === 'google_review' ? 'Google review' : `Referred ${d.ref_name || 'a client'} (${EARN[kind].label.replace('Referral: ', '')})`;
-    emailed = await awardTo(admin, m, points, kind, reason);
+    const emailReason = kind === 'google_review' ? 'your Google review' : `referring ${d.ref_name || 'someone'} to us`;
+    emailed = await awardTo(admin, m, points, kind, reason, emailReason);
     await query(`UPDATE points_claims SET status = 'approved', points = $1, hr_note = $2, updated_at = $3 WHERE id = $4`, [points, str(b.hr_note, 500), nowIso(), c.id]);
   } else {
     await query(`UPDATE points_claims SET status = 'declined', hr_note = $1, updated_at = $2 WHERE id = $3`, [str(b.hr_note, 500), nowIso(), c.id]);
@@ -1087,6 +1089,15 @@ async function admChatStatus(admin, b) {
   await query(`UPDATE chats SET status = $1 WHERE id = $2`, [b.status === 'closed' ? 'closed' : 'open', int(b.id)]);
   return { ok: true };
 }
+async function admTestPointsEmail(admin, b) {
+  if (!canEmailVisitors()) fail(400, 'Add RESEND_API_KEY in Vercel first.');
+  const to = email(b.email || admin.email);
+  const base = assetBase();
+  const html = pointsEmailHtml({ firstName: 'there', points: 50, reason: 'your Google review', balance: 1350, assetBase: base, siteLink: base + '/?points=1', nairaPerPoint: REWARDS.cash.nairaPerPoint });
+  const ok = await sendEmail({ to, subject: 'TEST: You just got 50 Dé Pitch points', html, replyTo: ADMIN_EMAIL });
+  if (!ok) fail(502, 'Resend did not accept the email. Check that depitchhq.com is verified in Resend, or send the test to the email you signed up to Resend with.');
+  return { ok: true };
+}
 async function admSettings() {
   return { emailsOn: canEmailVisitors(), chatEmailAfter: CHAT_EMAIL_AFTER_MIN, formsEmail: FORMS_EMAIL };
 }
@@ -1158,6 +1169,6 @@ const ACTIONS = {
   'emp.referrals': empReferrals, 'emp.submitReferral': empSubmitReferral,
   'adm.enquiries': admEnquiries, 'adm.enquiryStatus': admEnquiryStatus, 'adm.referrals': admReferrals, 'adm.updateReferral': admUpdateReferral,
   'adm.points': admPoints, 'adm.reviewClaim': admReviewClaim, 'adm.awardPoints': admAwardPoints, 'adm.updateRedemption': admUpdateRedemption,
-  'adm.chats': admChats, 'adm.chat': admChat, 'adm.chatReply': admChatReply, 'adm.chatStatus': admChatStatus, 'adm.settings': admSettings,
+  'adm.chats': admChats, 'adm.chat': admChat, 'adm.chatReply': admChatReply, 'adm.chatStatus': admChatStatus, 'adm.settings': admSettings, 'adm.testPointsEmail': admTestPointsEmail,
   'adm.announcements': admAnnouncements, 'adm.saveAnnouncement': admSaveAnnouncement, 'adm.deleteAnnouncement': admDeleteAnnouncement
 };

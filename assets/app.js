@@ -181,7 +181,7 @@
     var st = box.querySelector('.cw-status');
     if (st) st.textContent = o.open ? 'We usually reply within a few minutes' : 'Offline now';
     var note = chatPane.querySelector('.cw-note');
-    if (note) note.textContent = o.open ? 'We will reply here. If you leave, we will get back to you at ' + (chat.email || 'your email') + '.' : o.msg + ' We will reply here and at ' + (chat.email || 'your email') + '.';
+    if (note) note.textContent = o.open ? 'Dé Pitch will reply here. If you leave, we will get back to you at ' + (chat.email || 'your email') + '.' : o.msg + ' We will reply here and at ' + (chat.email || 'your email') + '.';
     var intro = chatPane.querySelector('.cw-offline');
     if (intro) { intro.hidden = o.open; intro.textContent = o.msg; }
   }
@@ -212,7 +212,7 @@
     }
     if (chatPane.querySelector('.cw-thread')) return;
     chatPane.innerHTML = '<div class="cw-thread" aria-live="polite"></div>' +
-      '<p class="cw-note">People Ops will reply here. If you leave, we will get back to you at ' + esc(chat.email) + '.</p>' +
+      '<p class="cw-note">Dé Pitch will reply here. If you leave, we will get back to you at ' + esc(chat.email) + '.</p>' +
       '<form class="cw-send" id="cw-send"><textarea name="message" rows="2" maxlength="2000" placeholder="Write a message" aria-label="Message" required></textarea><button class="btn btn-dark" type="submit" aria-label="Send">Send</button></form>' +
       '<button type="button" class="cw-link" id="cw-new">Start a new conversation</button>';
     lastId = 0;
@@ -386,6 +386,9 @@
       }).catch(function (x) { f.querySelector('.cw-err').textContent = x.message; btn.disabled = false; btn.textContent = 'Send request'; });
     });
   }
+
+  // Links in points emails open the rewards tab: /?points=1
+  if (/[?&]points=1/.test(location.search)) setTimeout(function () { setOpen(true); box.querySelector('[data-tab="points"]').click(); }, 300);
 
   document.addEventListener('click', function (e) {
     if (!e.target.isConnected) return; // the widget re-drew itself during this click

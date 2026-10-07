@@ -1487,7 +1487,7 @@
       var cat = j.catalogue;
       var earnOpts = cat.earn.map(function (e) { return '<option value="' + e.key + '" data-p="' + e.points + '">' + esc(e.label) + ' (' + e.points + ')</option>'; }).join('');
       var pendC = j.claims.filter(function (c) { return c.status === 'pending'; }).length, pendR = j.redemptions.filter(function (r) { return r.status === 'pending'; }).length;
-      el.innerHTML = head('Points & rewards', 'Website visitors and clients earn points for Google reviews and referrals, and redeem them for services or cash.', '<button class="btn" id="pt-award" type="button">+ Award points</button>') +
+      el.innerHTML = head('Points & rewards', 'Website visitors and clients earn points for Google reviews and referrals, and redeem them for services or cash.', '<button class="btn secondary" id="pt-test" type="button">Send me a test email</button><button class="btn" id="pt-award" type="button">+ Award points</button>') +
         (j.emailsOn ? '' : '<div class="announce"><span class="tag">Setup</span><span>Points emails to members are off until you add a <b>RESEND_API_KEY</b> in Vercel. See the README. Points still show in the website chat.</span></div>') +
         '<div class="stats"><div class="stat hero"><span class="label">Claims to review</span><span class="value">' + pendC + '</span></div><div class="stat"><span class="label">Redemptions to handle</span><span class="value">' + pendR + '</span></div>' +
         '<div class="stat"><span class="label">Members</span><span class="value">' + j.members.length + '</span></div></div>' +
@@ -1508,6 +1508,11 @@
         }), 'No members yet.') + '</div>' +
         '<div class="panel"><h2>Points rules</h2><div class="grid-2" style="margin-top:10px"><div>' + table(['Earn', '>Points'], cat.earn.map(function (e) { return '<tr><td>' + esc(e.label) + '</td><td class="r">' + e.points.toLocaleString() + '</td></tr>'; })) +
         '</div><div>' + table(['Redeem', '>Points'], cat.rewards.map(function (r) { return '<tr><td>' + esc(r.label) + '</td><td class="r">' + r.points.toLocaleString() + '</td></tr>'; })) + '</div></div></div>';
+      $('#pt-test', el).onclick = function () {
+        var m = openModal({ title: 'Send a test points email', body: '<label class="field">Send to<input type="email" id="pt-to" value="' + esc(S.user.email) + '"></label><p class="small muted">Shows what members receive. Until depitchhq.com is verified in Resend, it can only reach the email you signed up to Resend with.</p><p class="error" id="pt-err"></p>',
+          foot: '<button class="btn secondary" data-close type="button">Cancel</button><button class="btn" id="pt-send" type="button">Send test</button>' });
+        $('#pt-send', m).onclick = function () { busy(this, true, 'Sending…'); api('adm.testPointsEmail', { email: $('#pt-to', m).value }).then(function () { closeModal(); toast('Test email sent.'); }).catch(errIn(m, '#pt-err')); };
+      };
       $('#pt-award', el).onclick = function () {
         var m = openModal({
           title: 'Award points', body: '<form id="aw" class="stack"><div class="grid-2"><label class="field">Full name<input name="name" id="aw-name" required></label><label class="field">Email<input type="email" name="email" id="aw-email" required></label></div>' +

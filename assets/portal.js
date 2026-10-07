@@ -252,7 +252,7 @@
       '<label class="field">Password<input type="password" name="password" id="login-password" autocomplete="current-password" required></label>' +
       '<p class="error" id="login-error">' + esc(msg || '') + '</p>' +
       '<button class="btn block" type="submit">Sign in</button></form>' +
-      '<p class="small muted">Forgot your password or need an account? Email <b>' + esc(S.adminEmail) + '</b> and People Ops will reset it.</p>' +
+      '<p class="small muted">Forgot your password? <a href="contact.html">Contact the team.</a></p>' +
       '<p class="small"><a href="index.html">← Back to depitchhq.com</a></p>');
     $('#login').onsubmit = function (e) {
       e.preventDefault();
@@ -307,8 +307,8 @@
 
   /* ================= shell ================= */
   var NAV = {
-    employee: [['overview', 'Overview'], ['pay', 'Pay & payslips'], ['reports', 'Weekly reports'], ['requests', 'Requests'], ['referrals', 'Referrals'], ['documents', 'Documents']],
-    client: [['overview', 'Overview'], ['talents', 'Your talents'], ['invoices', 'Invoices'], ['recruitment', 'Request talent'], ['documents', 'Documents']],
+    employee: [['overview', 'Overview', 'overview'], ['pay', 'Pay & payslips', 'pay'], ['reports', 'Weekly reports', 'reports'], ['requests', 'Requests', 'requests'], ['referrals', 'Referrals', 'referrals'], ['documents', 'Documents', 'documents']],
+    client: [['overview', 'Overview', 'overview'], ['talents', 'Your talents', 'talents'], ['invoices', 'Invoices', 'invoices'], ['recruitment', 'Request talent', 'recruitment'], ['documents', 'Documents', 'documents']],
     admin: [['inbox', 'Inbox', 'inbox'], ['chat', 'Live chat', 'chats'], ['enquiries', 'Website enquiries', 'enquiries'], ['people', 'People'], ['clients', 'Clients'], ['payroll', 'Payroll', 'payroll_pending'], ['invoices', 'Invoices', 'invoices_draft'],
       ['reports', 'Weekly reports', 'reports'], ['requests', 'Requests', 'requests'], ['recruitment', 'Talent requests', 'recruitment'],
       ['feedback', 'Reviews & removals', 'feedback'], ['referrals', 'Referrals', 'referrals'], ['points', 'Points & rewards', 'points'], ['documents', 'Documents'], ['announcements', 'Announcements']]
@@ -346,16 +346,35 @@
     $('#menu-btn').onclick = function () { $('#side').classList.add('open'); };
     $('#side').addEventListener('click', function (e) { if (e.target.closest('a')) this.classList.remove('open'); });
     var fn = VIEWS[S.user.role][tab];
+    if (S.user.role !== 'admin') {
+      api('me.seen', { tab: tab }).then(function (j) { S.counts = j.counts || {}; paintCounts(); }).catch(function () {});
+    }
     fn($('#content')).catch(function (x) {
       $('#content').innerHTML = '<div class="panel"><p class="error">' + esc(x.message) + '</p><button class="btn secondary" id="retry" type="button">Try again</button></div>';
       $('#retry').onclick = renderShell;
     });
   }
 
+  function paintCounts() {
+    $$('.nav a').forEach(function (a) {
+      var key = a.getAttribute('href').slice(2);
+      var def = NAV[S.user.role].filter(function (n) { return n[0] === key; })[0];
+      if (!def || !def[2]) return;
+      var c = countFor(def[2]);
+      var badge = a.querySelector('.count');
+      if (c && !badge) { badge = document.createElement('span'); badge.className = 'count'; a.appendChild(badge); }
+      if (badge) { if (c) badge.textContent = c; else badge.remove(); }
+    });
+    var total = NAV[S.user.role].reduce(function (t, n) { return t + (n[2] && n[2] !== 'inbox' ? countFor(n[2]) : 0); }, 0);
+    var mb = document.getElementById('menu-btn');
+    if (mb) mb.classList.toggle('has-count', total > 0);
+    document.title = (total ? '(' + total + ') ' : '') + 'Portal | Dé Pitch';
+  }
   function refreshCounts() {
-    if (S.user.role !== 'admin') return Promise.resolve();
+    if (S.user.role !== 'admin') return api('me.counts').then(function (j) { S.counts = j.counts || {}; paintCounts(); }).catch(function () {});
     return api('adm.overview').then(function (j) {
       S.counts = j.counts;
+      paintCounts();
       $$('.nav a').forEach(function (a) {
         var key = a.getAttribute('href').slice(2);
         var def = NAV.admin.filter(function (n) { return n[0] === key; })[0];
@@ -662,24 +681,30 @@
   CLI.overview = function (el) {
     return api('cli.dashboard').then(function (j) {
       var cur = (j.client && j.client.currency) || 'NGN';
-      var monthly = j.talents.reduce(function (s, t) { return s + Number(t.bill_rate || 0); }, 0);
+      function byCur(list, amt, curOf) {
+        var t = {}; list.forEach(function (x) { var c = curOf(x) || cur; t[c] = (t[c] || 0) + Number(amt(x) || 0); });
+        var keys = Object.keys(t); return keys.length ? keys.map(function (c) { return money(t[c], c); }).join(' + ') : money(0, cur);
+      }
+      var monthly = byCur(j.talents, function (t) { return t.bill_rate; }, function (t) { return t.pay_currency; });
       var outstanding = j.invoices.filter(function (i) { return i.status === 'sent'; });
-      var owed = outstanding.reduce(function (s, i) { return s + Number(i.total); }, 0);
+      var owed = byCur(outstanding, function (i) { return i.total; }, function (i) { return i.currency; });
       var pm = j.payroll;
       el.innerHTML = announceBar() + head(j.client ? j.client.name : 'Overview', 'Your Dé Pitch talents, payroll and invoices in one place.') +
         '<div class="stats">' +
         '<div class="stat hero"><span class="label">Talents placed</span><span class="value">' + j.talents.length + '</span><span class="sub">Active with your company</span></div>' +
-        '<div class="stat"><span class="label">Monthly payroll</span><span class="value">' + money(monthly, cur) + '</span><span class="sub">Current monthly rate for all talents</span></div>' +
-        '<div class="stat"><span class="label">Outstanding invoices</span><span class="value">' + money(owed, cur) + '</span><span class="sub">' + outstanding.length + ' awaiting payment</span></div>' +
+        '<div class="stat"><span class="label">Monthly payroll</span><span class="value" style="font-size:1.25rem">' + monthly + '</span><span class="sub">Current monthly rate for all talents</span></div>' +
+        '<div class="stat"><span class="label">Outstanding invoices</span><span class="value" style="font-size:1.25rem">' + owed + '</span><span class="sub">' + outstanding.length + ' awaiting payment</span></div>' +
         '<div class="stat"><span class="label">Open talent requests</span><span class="value">' + j.openRecruitment + '</span><span class="sub"><a href="#/recruitment">Request a new talent</a></span></div></div>' +
         '<div class="panel"><div class="panel-head"><h2>Payroll by month, per talent</h2><span class="small muted">From your invoices</span></div>' +
         (pm.periods.length ? table(['Talent'].concat(pm.periods.map(function (p) { return '>' + monthShort(p) + ' ' + p.slice(2, 4); })).concat(['>Total']), pm.rows.map(function (r) {
           var tot = 0;
-          return '<tr><td><b>' + esc(r.name) + '</b></td>' + pm.periods.map(function (p) { var v = r.amounts[p] || 0; tot += v; return '<td class="r">' + (v ? money(v, pm.currency) : '—') + '</td>'; }).join('') +
-            '<td class="r"><b>' + money(tot, pm.currency) + '</b></td></tr>';
-        }).concat(['<tr><td><b>Total</b></td>' + pm.periods.map(function (p) {
-          var s = pm.rows.reduce(function (a, r) { return a + (r.amounts[p] || 0); }, 0); return '<td class="r"><b>' + money(s, pm.currency) + '</b></td>';
-        }).join('') + '<td></td></tr>'])) : '<p class="empty">Monthly payroll appears here once your first invoice is issued.</p>') + '</div>' +
+          return '<tr><td><b>' + esc(r.name) + '</b></td>' + pm.periods.map(function (p) { var v = r.amounts[p] || 0; tot += v; return '<td class="r">' + (v ? money(v, r.currency) : '—') + '</td>'; }).join('') +
+            '<td class="r"><b>' + money(tot, r.currency) + '</b></td></tr>';
+        }).concat(Object.keys(pm.rows.reduce(function (o, r) { o[r.currency] = 1; return o; }, {})).map(function (c) {
+          return '<tr><td><b>Total (' + esc(c) + ')</b></td>' + pm.periods.map(function (p) {
+            var s = pm.rows.filter(function (r) { return r.currency === c; }).reduce(function (a, r) { return a + (r.amounts[p] || 0); }, 0); return '<td class="r"><b>' + (s ? money(s, c) : '—') + '</b></td>';
+          }).join('') + '<td></td></tr>';
+        }))) : '<p class="empty">Monthly payroll appears here once your first invoice is issued.</p>') + '</div>' +
         '<div class="panel"><div class="panel-head"><h2>Recent invoices</h2><a class="btn sm secondary" href="#/invoices">All invoices</a></div>' + invoiceTable(j.invoices.slice(0, 5)) + '</div>';
       bindInvoiceButtons(el, 'cli.invoice');
     });
@@ -707,7 +732,7 @@
       el.innerHTML = announceBar() + head('Your talents', 'Review a talent at any time. If a placement is not working, send a removal request and People Ops will follow up.') +
         (j.talents.length ? '<div class="talents">' + j.talents.map(function (t) {
           return '<div class="talent"><div class="who"><div class="avatar">' + esc(initials(t.name)) + '</div><div><b>' + esc(t.name) + '</b><div class="small muted">' + esc(t.job_title) + '</div></div></div>' +
-            '<dl><dt>Started</dt><dd>' + esc(fmtDate(t.start_date) || '—') + '</dd><dt>Monthly rate</dt><dd>' + money(t.bill_rate, cur) + '</dd><dt>Email</dt><dd>' + esc(t.email) + '</dd></dl>' +
+            '<dl><dt>Started</dt><dd>' + esc(fmtDate(t.start_date) || '—') + '</dd><dt>Monthly rate</dt><dd>' + money(t.bill_rate, t.pay_currency || cur) + '</dd><dt>Email</dt><dd>' + esc(t.email) + '</dd></dl>' +
             '<div class="row"><button class="btn sm" data-review="' + t.id + '" type="button">Write a review</button><button class="btn sm danger" data-remove="' + t.id + '" type="button">Request removal</button></div></div>';
         }).join('') + '</div>' : '<div class="panel"><p class="empty">No talents are placed with you yet. <a href="#/recruitment">Request a talent</a>.</p></div>') +
         '<div class="panel"><div class="panel-head"><h2>Reviews and removal requests</h2></div>' +
@@ -1089,18 +1114,23 @@
       var s = items().reduce(function (a, i) { return a + (Number(i.amount) || 0); }, 0);
       $('#iv-sub', m).textContent = money(s, cur); $('#iv-tot', m).textContent = money(s + (Number($('#iv-tax', m).value) || 0), cur);
     }
+    var useCur = false;
     function fill() {
       var c = $('#iv-client', m).value, p = $('#iv-period', m).value;
       if (!c || !p) { $('#iv-error', m).textContent = 'Choose a client and month first.'; return; }
-      api('adm.draftInvoice', { client_id: c, period: p }).then(function (j) {
+      api('adm.draftInvoice', { client_id: c, period: p, currency: useCur ? $('#iv-cur', m).value : '' }).then(function (j) {
         $('#iv-lines', m).innerHTML = j.items.length ? j.items.map(invLine).join('') : invLine();
-        $('#iv-cur', m).value = j.currency; $('#iv-error', m).textContent = j.items.length ? '' : 'No talents are placed with this client yet. Add lines by hand.';
+        $('#iv-cur', m).value = j.currency;
+        var note = j.items.length ? '' : 'No talents paid in ' + j.currency + ' are placed with this client. ';
+        if (j.otherCurrencies && j.otherCurrencies.length) note += 'This client also has talents paid in ' + j.otherCurrencies.join(', ') + '. Make a separate invoice for them by choosing that currency.';
+        $('#iv-error', m).textContent = note;
         totals();
       }).catch(errIn(m, '#iv-error'));
     }
     bindLineBox($('#iv', m), totals); totals();
     $('#iv-fill', m).onclick = fill;
-    if (!inv.id) { $('#iv-client', m).onchange = fill; $('#iv-period', m).onchange = function () { if ($('#iv-client', m).value) fill(); }; }
+    $('#iv-cur', m).addEventListener('change', function () { if (!inv.id && $('#iv-client', m).value) { useCur = true; fill(); } totals(); });
+    if (!inv.id) { $('#iv-client', m).onchange = function () { useCur = false; fill(); }; $('#iv-period', m).onchange = function () { if ($('#iv-client', m).value) fill(); }; }
     $('#iv-add', m).onclick = function () { $('#iv-lines', m).insertAdjacentHTML('beforeend', invLine()); };
     $('#iv-save', m).onclick = function () {
       var d = formObj($('#iv', m)); d.items = items(); if (inv.id) d.id = inv.id;
@@ -1609,7 +1639,7 @@
     var side = document.getElementById('side');
     if (side && side.classList.contains('open') && !side.contains(e.target) && !e.target.closest('#menu-btn')) side.classList.remove('open');
   });
-  setInterval(function () { if (S.user && S.user.role === 'admin' && !S.user.must_change && document.getElementById('side')) refreshCounts(); }, 30000);
+  setInterval(function () { if (S.user && !S.user.must_change && document.getElementById('side')) refreshCounts(); }, 30000);
   window.addEventListener('hashchange', function () { if (S.user && !S.user.must_change) renderShell(); });
   boot();
 })();

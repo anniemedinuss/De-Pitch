@@ -177,10 +177,35 @@
     a.addEventListener('click', function (e) { e.preventDefault(); setOpen(true); box.querySelector('[data-tab="points"]').click(); });
   });
 
+  /* working hours: Mon–Fri, 10am–5pm Lagos time */
+  function office() {
+    var parts = {};
+    try {
+      new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Lagos', weekday: 'short', hour: 'numeric', hour12: false }).formatToParts(new Date())
+        .forEach(function (p) { parts[p.type] = p.value; });
+    } catch (e) { var d = new Date(); parts = { weekday: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()], hour: String((d.getUTCHours() + 1) % 24) }; }
+    var day = parts.weekday, hour = Number(parts.hour) % 24;
+    var weekend = day === 'Sat' || day === 'Sun';
+    if (!weekend && hour >= 10 && hour < 17) return { open: true, msg: 'We usually reply within a few minutes' };
+    if (!weekend && hour < 10) return { open: false, msg: 'We are offline right now. We will reply today from 10am.' };
+    if (weekend || day === 'Fri') return { open: false, msg: 'We are offline for the weekend. We will reply on the next working day (Monday).' };
+    return { open: false, msg: 'We are offline for today. We will reply tomorrow from 10am.' };
+  }
+  function paintOffice() {
+    var o = office();
+    var st = box.querySelector('.cw-status');
+    if (st) st.textContent = o.open ? 'We usually reply within a few minutes' : 'Offline now';
+    var note = chatPane.querySelector('.cw-note');
+    if (note) note.textContent = o.open ? 'We will reply here. If you leave, we will get back to you at ' + (chat.email || 'your email') + '.' : o.msg + ' We will reply here and at ' + (chat.email || 'your email') + '.';
+    var intro = chatPane.querySelector('.cw-offline');
+    if (intro) { intro.hidden = o.open; intro.textContent = o.msg; }
+  }
+  setInterval(paintOffice, 60000);
+
   /* chat */
   function renderChat() {
     if (!chat.token) {
-      chatPane.innerHTML = '<p class="cw-intro">Questions about your CV, interviews or hiring? Send us a message and People Ops will reply right here.</p>' +
+      chatPane.innerHTML = '<p class="cw-intro">Questions about your CV, interviews or hiring? Send us a message and we will reply right here.</p><p class="cw-offline" hidden></p>' +
         '<form class="cw-form" id="cw-start"><input class="hp" name="hp" tabindex="-1" autocomplete="off" aria-hidden="true">' +
         '<label>Your name<input name="name" required maxlength="120" value="' + esc(member.name || '') + '"></label>' +
         '<label>Email<input type="email" name="email" required maxlength="160" value="' + esc(member.email || '') + '"></label>' +
@@ -197,6 +222,7 @@
           saveChat(); lastId = 0; renderChat(); addMessages(j.messages || []);
         }).catch(function (x) { f.querySelector('.cw-err').textContent = x.message; btn.disabled = false; btn.textContent = 'Send message'; });
       });
+      paintOffice();
       return;
     }
     if (chatPane.querySelector('.cw-thread')) return;
@@ -216,11 +242,22 @@
         .finally(function () { btn.disabled = false; ta.focus(); });
     });
     chatPane.querySelector('#cw-new').addEventListener('click', resetChat);
+    paintOffice();
     poll(); schedulePoll();
   }
   function resetChat() { chat = {}; saveChat(); lastId = 0; chatPane.innerHTML = ''; renderChat(); }
+  function autoNote() {
+    var o = office(), thread = chatPane.querySelector('.cw-thread');
+    if (o.open || !thread || thread.querySelector('.cw-auto')) return;
+    var el = document.createElement('div');
+    el.className = 'cw-msg staff cw-auto';
+    el.innerHTML = '<span class="who">Dé Pitch · automatic reply</span><p>' + esc('Thanks for your message! ' + o.msg + ' Our working hours are Monday to Friday, 10am to 5pm.') + '</p>';
+    thread.appendChild(el);
+    thread.scrollTop = thread.scrollHeight;
+  }
   function addMessages(msgs) {
     var thread = chatPane.querySelector('.cw-thread');
+    var fromVisitor = msgs.some(function (m) { return m.sender === 'visitor' && m.id > lastId; });
     msgs.forEach(function (m) {
       if (m.id <= lastId) return;
       lastId = m.id;
@@ -235,6 +272,7 @@
       thread.appendChild(el);
     });
     if (thread) thread.scrollTop = thread.scrollHeight;
+    if (fromVisitor) { var last = msgs[msgs.length - 1]; if (last && last.sender === 'visitor') autoNote(); }
   }
   function poll() {
     if (!chat.token) return;

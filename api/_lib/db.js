@@ -293,6 +293,8 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS hits_key_idx ON hits (key, at)`,
   `CREATE INDEX IF NOT EXISTS chat_messages_chat_idx ON chat_messages (chat_id)`,
   `CREATE INDEX IF NOT EXISTS ledger_member_idx ON points_ledger (member_id)`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS seen TEXT DEFAULT '{}'`,
+  `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
   `CREATE INDEX IF NOT EXISTS payroll_user_idx ON payroll (user_id)`,
   `CREATE INDEX IF NOT EXISTS reports_user_idx ON reports (user_id)`,
   `CREATE INDEX IF NOT EXISTS requests_user_idx ON requests (user_id)`,

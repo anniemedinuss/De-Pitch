@@ -362,8 +362,10 @@ function payrollMatrix(items, talents) {
   for (const it of items) {
     if (!periods.includes(it.period)) continue;
     const key = it.talent_id ? 't' + it.talent_id : 'x' + it.description;
-    if (!byTalent[key]) byTalent[key] = { name: it.talent_name || names[it.talent_id] || it.description || 'Other', amounts: {} };
-    byTalent[key].amounts[it.period] = (byTalent[key].amounts[it.period] || 0) + num(it.amount);
+    const cur = it.currency || 'NGN';
+    const k2 = key + ':' + cur;
+    if (!byTalent[k2]) byTalent[k2] = { name: it.talent_name || names[it.talent_id] || it.description || 'Other', currency: cur, amounts: {} };
+    byTalent[k2].amounts[it.period] = (byTalent[k2].amounts[it.period] || 0) + num(it.amount);
   }
   return { periods, rows: Object.values(byTalent), currency: items[0] ? items[0].currency : 'NGN' };
 }
@@ -596,8 +598,11 @@ async function admDraftInvoice(admin, b) {
   const p = period(b.period);
   const client = await one(`SELECT * FROM clients WHERE id=$1`, [clientId]);
   if (!client) fail(400, 'Choose a client.');
-  const talents = await query(`SELECT id, name, job_title, bill_rate FROM users WHERE role='employee' AND active=TRUE AND client_id=$1 ORDER BY name`, [clientId]);
-  return { items: talents.map((t) => ({ talent_id: t.id, talent_name: t.name, description: `${t.name}${t.job_title ? ' — ' + t.job_title : ''} (${monthName(p)})`, amount: num(t.bill_rate) })), currency: client.currency || 'NGN' };
+  const cur = (str(b.currency, 3) || client.currency || 'NGN').toUpperCase();
+  const all = await query(`SELECT id, name, job_title, bill_rate, pay_currency FROM users WHERE role='employee' AND active=TRUE AND client_id=$1 ORDER BY name`, [clientId]);
+  const talents = all.filter((t) => (t.pay_currency || 'NGN') === cur);
+  const others = [...new Set(all.filter((t) => (t.pay_currency || 'NGN') !== cur).map((t) => t.pay_currency))];
+  return { items: talents.map((t) => ({ talent_id: t.id, talent_name: t.name, description: `${t.name}${t.job_title ? ' — ' + t.job_title : ''} (${monthName(p)})`, amount: num(t.bill_rate) })), currency: cur, otherCurrencies: others };
 }
 
 async function admSaveInvoice(admin, b) {
@@ -629,7 +634,7 @@ async function admInvoiceStatus(admin, b) {
   const col = status === 'sent' ? ', sent_at=$3' : status === 'paid' ? ', paid_at=$3' : '';
   const params = [status, int(b.id)];
   if (col) params.push(today());
-  await query(`UPDATE invoices SET status=$1${col} WHERE id=$2`, params);
+  await query(`UPDATE invoices SET status=$1${col}, updated_at='${nowIso()}' WHERE id=$2`, params);
   return { ok: true };
 }
 
@@ -1091,7 +1096,46 @@ const PUBLIC = {
   'public.chatStart': pubChatStart, 'public.chatSend': pubChatSend, 'public.chatPoll': pubChatPoll
 };
 
+/* ---------- notification counts for employees and clients ---------- */
+async function meCounts(u) {
+  const seen = json(u.seen || '{}', {});
+  const s = (k) => String(seen[k] || '');
+  if (u.role === 'employee') {
+    const c = await one(`SELECT
+      (SELECT COUNT(*)::int FROM payroll WHERE user_id=$1 AND status='paid' AND updated_at > $2) AS pay,
+      (SELECT COUNT(*)::int FROM reports WHERE user_id=$1 AND reviewed_at <> '' AND reviewed_at > $3) AS reports,
+      (SELECT COUNT(*)::int FROM requests WHERE user_id=$1 AND reviewed_at <> '' AND reviewed_at > $4) AS requests,
+      (SELECT COUNT(*)::int FROM referrals WHERE user_id=$1 AND status <> 'submitted' AND updated_at > $5) AS referrals,
+      (SELECT COUNT(*)::int FROM files WHERE owner_id=$1 AND category <> 'Receipt' AND created_at > $6) AS documents,
+      (SELECT COUNT(*)::int FROM announcements WHERE active AND audience IN ('employees','all') AND created_at > $7) AS overview`,
+      [u.id, s('pay'), s('reports'), s('requests'), s('referrals'), s('documents'), s('overview')]);
+    return { counts: c };
+  }
+  if (u.role === 'client' && u.client_id) {
+    const c = await one(`SELECT
+      (SELECT COUNT(*)::int FROM invoices WHERE client_id=$1 AND status IN ('sent','paid') AND updated_at > $2) AS invoices,
+      (SELECT COUNT(*)::int FROM recruitment WHERE client_id=$1 AND status <> 'submitted' AND updated_at > $3) AS recruitment,
+      (SELECT COUNT(*)::int FROM talent_feedback WHERE client_id=$1 AND status <> 'submitted' AND updated_at > $4) AS talents,
+      (SELECT COUNT(*)::int FROM files WHERE client_id=$1 AND created_at > $5) AS documents,
+      (SELECT COUNT(*)::int FROM announcements WHERE active AND audience IN ('clients','all') AND created_at > $6) AS overview`,
+      [u.client_id, s('invoices'), s('recruitment'), s('talents'), s('documents'), s('overview')]);
+    return { counts: c };
+  }
+  return { counts: {} };
+}
+async function meSeen(u, b) {
+  if (!u.id) return { ok: true };
+  const tab = str(b.tab, 30);
+  if (!/^[a-z]+$/.test(tab)) return { ok: true };
+  const seen = json(u.seen || '{}', {});
+  seen[tab] = nowIso();
+  await query(`UPDATE users SET seen = $1 WHERE id = $2`, [JSON.stringify(seen), u.id]);
+  u.seen = JSON.stringify(seen);
+  return meCounts(u);
+}
+
 const ACTIONS = {
+  'me.counts': meCounts, 'me.seen': meSeen,
   'emp.dashboard': empDashboard, 'emp.payroll': empPayroll, 'emp.payslip': empPayslip,
   'emp.reports': empReports, 'emp.submitReport': empSubmitReport,
   'emp.requests': empRequests, 'emp.submitRequest': empSubmitRequest, 'emp.documents': empDocuments,

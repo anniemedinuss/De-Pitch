@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /thank-you
+Disallow: /youre-in
+Sitemap: https://www.depitchhq.com/sitemap.xml

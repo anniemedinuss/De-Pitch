@@ -311,9 +311,10 @@
     client: [['overview', 'Overview', 'overview'], ['talents', 'Your talents', 'talents'], ['invoices', 'Invoices', 'invoices'], ['recruitment', 'Request talent', 'recruitment'], ['documents', 'Documents', 'documents']],
     admin: [['inbox', 'Inbox', 'inbox'], ['chat', 'Live chat', 'chats'], ['services', 'Services', 'services'], ['enquiries', 'Website enquiries', 'enquiries'], ['people', 'People'], ['clients', 'Clients'], ['payroll', 'Payroll', 'payroll_pending'], ['invoices', 'Invoices', 'invoices_draft'],
       ['reports', 'Weekly reports', 'reports'], ['requests', 'Requests', 'requests'], ['recruitment', 'Talent requests', 'recruitment'],
-      ['feedback', 'Reviews & removals', 'feedback'], ['referrals', 'Referrals', 'referrals'], ['points', 'Points & rewards', 'points'], ['documents', 'Documents'], ['announcements', 'Announcements']]
+      ['feedback', 'Reviews & removals', 'feedback'], ['referrals', 'Referrals', 'referrals'], ['points', 'Points & rewards', 'points'], ['documents', 'Documents'], ['announcements', 'Announcements'], ['campaigns', 'Email campaigns'], ['audience', 'Email audience']],
+    media: [['campaigns', 'Email campaigns'], ['audience', 'Audience']]
   };
-  var ROLE_LABEL = { employee: 'Employee', client: 'Client', admin: 'People Ops' };
+  var ROLE_LABEL = { employee: 'Employee', client: 'Client', admin: 'People Ops', media: 'Media' };
 
   function currentTab() {
     var tabs = NAV[S.user.role].map(function (n) { return n[0]; });
@@ -344,7 +345,13 @@
     $('#out-btn').onclick = signOut;
     $('#pw-btn').onclick = changePasswordModal;
     $('#menu-btn').onclick = function () { $('#side').classList.add('open'); };
-    $('#side').addEventListener('click', function (e) { if (e.target.closest('a')) this.classList.remove('open'); });
+    $('#side').addEventListener('click', function (e) {
+      var a = e.target.closest('a');
+      if (!a) return;
+      this.classList.remove('open');
+      if (a.getAttribute('href') === '#/campaigns') sessionStorage.removeItem('dp_mkt_edit');
+      if (a.getAttribute('href') === '#/' + tab) { e.preventDefault(); renderShell(); }
+    });
     var fn = VIEWS[S.user.role][tab];
     if (S.user.role !== 'admin') {
       api('me.seen', { tab: tab }).then(function (j) { S.counts = j.counts || {}; paintCounts(); }).catch(function () {});
@@ -842,7 +849,7 @@
     var emp = role === 'employee';
     return '<form id="pf" class="stack">' +
       (u.id ? '' : '<div class="grid-2"><label class="field">Role<select name="role" id="pf-role"><option value="employee"' + (role === 'employee' ? ' selected' : '') + '>Employee / talent</option>' +
-        '<option value="client"' + (role === 'client' ? ' selected' : '') + '>Client user</option><option value="admin"' + (role === 'admin' ? ' selected' : '') + '>People Ops admin</option></select></label>' +
+        '<option value="client"' + (role === 'client' ? ' selected' : '') + '>Client user</option><option value="admin"' + (role === 'admin' ? ' selected' : '') + '>People Ops admin</option><option value="media"' + (role === 'media' ? ' selected' : '') + '>Media (email marketing)</option></select></label>' +
         '<label class="field">Email<input type="email" name="email" id="pf-email" required></label></div>' +
         '<label class="field">Password (optional)<input type="text" name="password" id="pf-password" autocomplete="off" placeholder="Leave empty to create a temporary password"><span class="hint">If you set one, share it with them privately. At least 10 characters with letters and numbers.</span></label>') +
       '<div class="grid-2"><label class="field">Full name<input name="name" id="pf-name" value="' + esc(u.name) + '" required></label>' +
@@ -910,7 +917,7 @@
       function draw() {
         var rows = cache.users.filter(function (u) { return u.role === filter; });
         el.innerHTML = head('People', 'Create accounts, place talents with clients, and set pay and bill rates.', '<button class="btn" id="add-person" type="button">+ Add person</button>') +
-          '<div class="seg">' + [['employee', 'Employees'], ['client', 'Client users'], ['admin', 'People Ops']].map(function (f) {
+          '<div class="seg">' + [['employee', 'Employees'], ['client', 'Client users'], ['admin', 'People Ops'], ['media', 'Media']].map(function (f) {
             return '<button type="button" data-f="' + f[0] + '" class="' + (filter === f[0] ? 'on' : '') + '">' + f[1] + ' (' + cache.users.filter(function (u) { return u.role === f[0]; }).length + ')</button>';
           }).join('') + '</div>' +
           table(filter === 'employee' ? ['Name', 'Client', '>Monthly pay', '>Bill rate', 'Status', '>'] : ['Name', 'Company', 'Last sign-in', 'Status', '>'], rows.map(function (u) {
@@ -1443,11 +1450,12 @@
             title: r.form, body: '<dl class="kv"><dt>Received</dt><dd>' + esc(fmtDate(r.created_at)) + ' ' + esc(r.created_at.slice(11, 16)) + ' UTC</dd>' +
               Object.keys(r.fields).map(function (k) { return '<dt>' + esc(cap(k.replace(/[-_]/g, ' '))) + '</dt><dd>' + esc(r.fields[k]) + '</dd>'; }).join('') +
               (r.file_id ? '<dt>File</dt><dd>' + fileLink(r.file_id, r.filename || 'Open file') + '</dd>' : '') + (r.page ? '<dt>Page</dt><dd>' + esc(r.page) + '</dd>' : '') + '</dl>' +
-              (r.email ? '<p class="small"><a href="mailto:' + esc(r.email) + '">Email ' + esc(r.name || r.email) + '</a></p>' : ''),
-            foot: '<button class="btn secondary" data-close type="button">Close</button>' + (r.status === 'new' ? '<button class="btn ok" id="enq-done" type="button">Mark as handled</button>' : '<button class="btn secondary" id="enq-new" type="button">Move back to new</button>')
+              '<p class="small muted">' + (r.followup_at ? 'Sent to De Pitch admin on Slack for follow-up on ' + esc(fmtDate(r.followup_at)) + '.' : 'Enquiries sent after hours, or not handled within 2 hours, go to De Pitch admin on Slack automatically.') + '</p>',
+            foot: '<button class="btn secondary" id="enq-slack" type="button" style="margin-right:auto">' + (r.followup_at ? 'Send to Slack again' : 'Send to De Pitch admin on Slack') + '</button><button class="btn secondary" data-close type="button">Close</button>' + (r.status === 'new' ? '<button class="btn ok" id="enq-done" type="button">Mark as handled</button>' : '<button class="btn secondary" id="enq-new" type="button">Move back to new</button>')
           });
           var bt = $('#enq-done', m) || $('#enq-new', m);
           bt.onclick = function () { api('adm.enquiryStatus', { id: r.id, status: r.status === 'new' ? 'handled' : 'new' }).then(after('Updated.')); };
+          $('#enq-slack', m).onclick = function () { var me = this; busy(me, true, 'Sending…'); api('adm.enquiryFollowUp', { id: r.id }).then(after('Sent to Slack for follow-up.')).catch(function (x) { busy(me, false); toast(x.message, true); }); };
         };
       });
     });
@@ -1622,6 +1630,8 @@
     review: 'CV in review', changes: 'Changes requested', approved: 'Approved', delivered: 'Delivered', closed: 'Closed' };
   var STAGE_PILL = { 'new': 'warn', scheduled: 'info', consulted: 'info', paid: 'ok', session: 'info', done: 'ok', review: 'warn', changes: 'bad', approved: 'ok', delivered: 'mute', closed: 'mute' };
   function stagePill(s) { return '<span class="pill ' + (STAGE_PILL[s] || 'mute') + '">' + esc(STAGE_LABEL[s] || s) + '</span>'; }
+  var SLOTS = ['11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00', '14:30'];
+  function slotLabel(t) { if (!t) return ''; var p = t.split(':'), h = Number(p[0]); return (h > 12 ? h - 12 : h) + ':' + p[1] + (h < 12 ? ' AM' : ' PM'); }
   function svcMonth(d) { return d ? String(d).slice(0, 7) : ''; }
   function svcName(r, labels, interests) {
     return esc(labels[r.service] || r.service) + (r.service === 'consultation' && r.interest ? '<div class="small muted">Interested in ' + esc(interests[r.interest] || r.interest) + '</div>' : '');
@@ -1636,7 +1646,8 @@
   // The steps each service goes through.
   function serviceSections(svc, r, interests, slackOn) {
     var consult = function (title) {
-      return '<div class="section-label">' + esc(title || 'Consultation') + '</div><div class="grid-3">' + dateField('sv-cdate', 'Consultation date', r.consult_date) +
+      return '<div class="section-label">' + esc(title || 'Consultation') + '</div><div class="grid-2">' + dateField('sv-cdate', 'Consultation date', r.consult_date) +
+        '<label class="field">Time (WAT)<select id="sv-ctime"><option value="">—</option>' + SLOTS.map(function (t) { return '<option value="' + t + '"' + (r.consult_time === t ? ' selected' : '') + '>' + slotLabel(t) + '</option>'; }).join('') + '</select></label>' +
         '<label class="field">Mode<select id="sv-cmode">' + ['', 'Virtual Meeting', 'Phone Call', 'In person'].map(function (o) { return '<option' + (r.consult_mode === o ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' +
         dateField('sv-cdone', 'Consultation held on', r.consult_done_at) + '</div>';
     };
@@ -1697,7 +1708,7 @@
     }
     function val(id) { var x = $('#' + id, m); return x ? x.value : ''; }
     function collect(extra) {
-      var d = { id: r.id, consult_date: val('sv-cdate'), consult_mode: val('sv-cmode'), consult_done_at: val('sv-cdone'), paid: state.paid,
+      var d = { id: r.id, consult_date: val('sv-cdate'), consult_time: val('sv-ctime'), consult_mode: val('sv-cmode'), consult_done_at: val('sv-cdone'), paid: state.paid,
         session_date: val('sv-session'), interest: val('sv-interest'), done_at: val('sv-done'), delivered_at: val('sv-delivered'), closed_at: val('sv-closed'),
         review_status: svc() === 'cv' && val('sv-done') ? state.review : '', track_notes: val('sv-notes') };
       if (isNew) { d.service = svc(); d.name = val('sv-name'); d.email = val('sv-email'); d.phone = val('sv-phone'); }
@@ -1756,10 +1767,10 @@
           shown = [];
           rows.forEach(function (r) {
             if (r.closed_at) return;
-            if (r.consult_date && !r.consult_done_at) shown.push({ r: r, when: String(r.consult_date).slice(0, 10), what: 'Consultation' });
+            if (r.consult_date && !r.consult_done_at) shown.push({ r: r, when: String(r.consult_date).slice(0, 10), time: r.consult_time || '', what: 'Consultation' });
             if (r.service === 'interview' && r.session_date && !r.done_at) shown.push({ r: r, when: r.session_date, what: 'Prep session' });
           });
-          shown.sort(function (a, b) { return a.when < b.when ? -1 : 1; });
+          shown.sort(function (a, b) { return (a.when + a.time) < (b.when + b.time) ? -1 : 1; });
         } else if (view === 'all') shown = rows;
         else shown = rows.filter(function (r) { return r.service === view || (view === 'recruitment' && r.service === 'hcm'); });
         var who = function (r) { return '<b>' + esc(r.name || '—') + '</b><div class="small muted">' + esc(r.email) + (r.phone ? ' · ' + esc(r.phone) : '') + '</div>'; };
@@ -1768,7 +1779,7 @@
         html += view === 'upcoming'
           ? table(['Date', 'What', 'Client', 'Service', 'Mode', '>'], shown.map(function (x) {
               var r = x.r, d = x.when, late = d < today;
-              return '<tr><td><b>' + esc(fmtDate(d)) + '</b>' + (d === today ? ' <span class="pill info">Today</span>' : late ? ' <span class="pill bad">Overdue</span>' : '') + '</td><td>' + x.what + '</td><td>' + who(r) + '</td><td>' + svcName(r, labels, interests) + '</td><td>' + esc(r.consult_mode || '—') + '</td>' + open(r) + '</tr>';
+              return '<tr><td><b>' + esc(fmtDate(d)) + '</b>' + (x.time ? '<div class="small">' + slotLabel(x.time) + '</div>' : '') + (d === today ? ' <span class="pill info">Today</span>' : late ? ' <span class="pill bad">Overdue</span>' : '') + '</td><td>' + x.what + '</td><td>' + who(r) + '</td><td>' + svcName(r, labels, interests) + '</td><td>' + esc(r.consult_mode || '—') + '</td>' + open(r) + '</tr>';
             }), 'Nothing booked yet.')
           : table(['Received', 'Client', 'Service', 'Consultation', 'Payment', 'Stage', '>'], shown.map(function (r) {
               return '<tr><td>' + esc(fmtDate(r.created_at)) + '</td><td>' + who(r) + '</td><td>' + svcName(r, labels, interests) + '</td><td>' + (r.consult_done_at ? 'Held ' + esc(fmtDate(r.consult_done_at)) : r.consult_date ? 'Booked ' + esc(fmtDate(String(r.consult_date).slice(0, 10))) : '—') +
@@ -1782,7 +1793,292 @@
     });
   };
 
-  var VIEWS = { employee: EMP, client: CLI, admin: ADM };
+  /* ================= email marketing (People Ops and Media) ================= */
+  var MKT = {};
+  var mktCache = null;
+  function mktMeta() { return mktCache ? Promise.resolve(mktCache) : api('mkt.templates').then(function (j) { mktCache = j; return j; }); }
+  function imgSrc(v, base) {
+    v = String(v || '');
+    if (/^file:\d+$/.test(v)) return '/api/portal?img=' + v.slice(5);
+    if (/^https:\/\//.test(v)) return v;
+    return '/assets/images/email/' + (v || 'hero') + '.jpg';
+  }
+  function tagPills(tags) {
+    return String(tags || '').split(',').filter(Boolean).map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join(' ');
+  }
+
+  MKT.campaigns = function (el) {
+    var editing = sessionStorage.getItem('dp_mkt_edit');
+    if (editing) return campaignEditor(el, editing === 'new' ? null : Number(editing));
+    return api('mkt.campaigns').then(function (j) {
+      var segLabel = {}; j.segments.forEach(function (s) { segLabel[s.key] = s.label; });
+      el.innerHTML = head('Email campaigns', 'Design an email from a template, choose who gets it, send yourself a test, then send.', '<button class="btn" id="mk-new" type="button">+ New campaign</button>') +
+        table(['Campaign', 'Audience', 'Status', '>Sent', '>Opened', 'Date', '>'], j.rows.map(function (r, i) {
+          var rate = r.sent_count ? Math.round(r.opens / r.sent_count * 100) + '%' : '—';
+          return '<tr><td><b>' + esc(r.name) + '</b><div class="small muted">' + esc(r.subject || 'No subject yet') + '</div></td><td class="small">' +
+            esc((r.audience || []).map(function (a) { return segLabel[a] || a.replace(/^tag:/, ''); }).join(', ') || '—') + '</td><td>' +
+            (r.status === 'sent' ? '<span class="pill ok">Sent</span>' : r.status === 'sending' ? '<span class="pill info">Sending (' + r.queued + ' left)</span>' : '<span class="pill mute">Draft</span>') +
+            (r.failed_count ? ' <span class="pill bad">' + r.failed_count + ' failed</span>' : '') + '</td><td class="r">' + (r.sent_count || 0) + '</td><td class="r">' + (r.sent_count ? r.opens + ' · ' + rate : '—') +
+            '</td><td>' + esc(fmtDate(r.sent_at || r.updated_at)) + '</td><td><div class="actions"><button class="btn sm" data-ed="' + r.id + '" type="button">' + (r.status === 'draft' ? 'Edit' : r.status === 'sending' ? 'Continue' : 'Report') + '</button>' +
+            '<button class="btn sm secondary" data-dup="' + r.id + '" type="button">Duplicate</button><button class="btn sm secondary" data-del="' + i + '" type="button">Delete</button></div></td></tr>';
+        }), 'No campaigns yet. Start one with "+ New campaign".') +
+        '<p class="small muted">Opens are counted when the recipient’s email app loads images, so treat them as a guide.</p>';
+      $('#mk-new', el).onclick = function () { sessionStorage.setItem('dp_mkt_edit', 'new'); renderShell(); };
+      $$('[data-ed]', el).forEach(function (b) { b.onclick = function () { sessionStorage.setItem('dp_mkt_edit', b.getAttribute('data-ed')); renderShell(); }; });
+      $$('[data-dup]', el).forEach(function (b) { b.onclick = function () { api('mkt.duplicate', { id: Number(b.getAttribute('data-dup')) }).then(function (r) { toast('Copied. You can edit it now.'); sessionStorage.setItem('dp_mkt_edit', r.id); renderShell(); }).catch(function (x) { toast(x.message, true); }); }; });
+      $$('[data-del]', el).forEach(function (b) {
+        b.onclick = function () {
+          var r = j.rows[Number(b.getAttribute('data-del'))];
+          if (!window.confirm('Delete "' + r.name + '"' + (r.status !== 'draft' ? ' and its send history' : '') + '?')) return;
+          api('mkt.deleteCampaign', { id: r.id }).then(function () { toast('Deleted.'); renderShell(); });
+        };
+      });
+    });
+  };
+
+  function campaignEditor(el, id) {
+    return Promise.all([mktMeta(), id ? api('mkt.campaign', { id: id }) : Promise.resolve(null), api('mkt.contacts'), api('mkt.images')]).then(function (res) {
+      var meta = res[0], data = res[1], aud = res[2], uploads = res[3].rows;
+      var c = data ? data.campaign : { name: '', subject: '', preheader: '', template: '', content: {}, audience: ['clients'], status: 'draft' };
+      if (c.status !== 'draft') return campaignReport(el, data, aud);
+      var tplById = {}; meta.templates.forEach(function (t) { tplById[t.id] = t; });
+      var state = { id: c.id || null, template: c.template, content: c.content || {}, audience: c.audience || [] };
+      function back() { sessionStorage.removeItem('dp_mkt_edit'); renderShell(); }
+
+      function showPicker() {
+        el.innerHTML = head(c.id ? 'Change template' : 'New campaign', 'Step 1: pick a template. You can change every word and photo next.', '<button class="btn secondary" id="mk-back" type="button">Back to campaigns</button>') +
+          '<div class="tpl-grid">' + meta.templates.map(function (t) {
+            return '<button class="tpl-card" type="button" data-tpl="' + t.id + '"><div class="tpl-thumb"><iframe tabindex="-1" title="' + esc(t.name) + '" data-prev="' + t.id + '"></iframe></div><b>' + esc(t.name) + '</b><span>' + esc(t.description) + '</span></button>';
+          }).join('') + '</div>';
+        $('#mk-back', el).onclick = c.template ? campaignEditor2 : back;
+        $$('[data-prev]', el).forEach(function (f) { api('mkt.preview', { template: f.getAttribute('data-prev'), content: {} }).then(function (p) { f.srcdoc = p.html; }); });
+        $$('[data-tpl]', el).forEach(function (b) { b.onclick = function () { c.template = b.getAttribute('data-tpl'); campaignEditor2(); window.scrollTo(0, 0); }; });
+      }
+      if (!state.template) showPicker(); else campaignEditor2();
+
+      function campaignEditor2() {
+        state.template = c.template;
+        var t = tplById[state.template] || meta.templates[0];
+        t.fields.forEach(function (fd) { if (state.content[fd.key] == null) state.content[fd.key] = fd.def; });
+        var imgOpts = function (v) {
+          return meta.images.map(function (im) { return '<option value="' + im.key + '"' + (v === im.key ? ' selected' : '') + '>' + esc(im.label) + '</option>'; }).join('') +
+            uploads.map(function (u) { var k = 'file:' + u.id; return '<option value="' + k + '"' + (v === k ? ' selected' : '') + '>Uploaded: ' + esc(u.filename) + '</option>'; }).join('') +
+            '<option value="__upload">Upload a new photo…</option>';
+        };
+        var fieldsHtml = t.fields.map(function (fd) {
+          var v = state.content[fd.key] || '';
+          if (fd.type === 'image') return '<div class="field img-field"><span>' + esc(fd.label) + '</span><div class="img-row"><img src="' + esc(imgSrc(v)) + '" alt="" data-thumb="' + fd.key + '"><select data-k="' + fd.key + '">' + imgOpts(v) + '</select></div></div>';
+          if (fd.type === 'textarea') return '<label class="field">' + esc(fd.label) + '<textarea data-k="' + fd.key + '" rows="4">' + esc(v) + '</textarea></label>';
+          return '<label class="field">' + esc(fd.label) + '<input data-k="' + fd.key + '" value="' + esc(v) + '"' + (fd.type === 'url' ? ' type="url" placeholder="https://"' : '') + '></label>';
+        }).join('');
+        var segs = aud.segments.map(function (s) {
+          return '<label class="check"><input type="checkbox" data-seg="' + esc(s.key) + '"' + (state.audience.indexOf(s.key) > -1 ? ' checked' : '') + '> ' + esc(s.label) + ' <span class="muted small">(' + s.count + ')</span></label>';
+        }).join('');
+        el.innerHTML = head(c.id ? 'Edit campaign' : 'New campaign', 'Template: ' + esc(t.name) + '. Type {{first_name}} anywhere to use each person’s first name.',
+          '<button class="btn secondary" id="mk-back" type="button">Back</button><button class="btn secondary" id="mk-tpl" type="button">Change template</button>') +
+          '<div class="mkt-grid"><div class="stack">' +
+          '<div class="panel stack"><div class="section-label">1. Subject and inbox preview</div>' +
+          '<label class="field">Subject line<input id="mk-subject" value="' + esc(c.subject || '') + '" placeholder="e.g. {{first_name}}, your CV deserves better"></label>' +
+          '<label class="field">Preview text<input id="mk-pre" value="' + esc(c.preheader || '') + '" placeholder="The short line shown after the subject in the inbox"></label>' +
+          '<label class="field">Campaign name (only you see this)<input id="mk-name" value="' + esc(c.name || '') + '" placeholder="e.g. October CV offer"></label></div>' +
+          '<div class="panel stack"><div class="section-label">2. Content</div>' + fieldsHtml + '<input type="file" id="mk-upload" accept="image/png,image/jpeg,image/webp" hidden></div>' +
+          '<div class="panel stack"><div class="section-label">3. Audience</div><div class="checks">' + segs + '</div><p class="small" id="mk-count"></p>' +
+          '<p class="small muted">Unsubscribed contacts are always left out. Manage people under <a href="#/audience">Audience</a>.</p></div>' +
+          '<div class="panel row"><button class="btn secondary" id="mk-save" type="button">Save draft</button><button class="btn secondary" id="mk-test" type="button">Send a test</button><button class="btn ok" id="mk-send" type="button" style="margin-left:auto">Send now</button></div>' +
+          '<p class="error" id="mk-err"></p></div>' +
+          '<div class="mkt-preview"><div class="seg" id="mk-view"><button type="button" data-w="desktop" class="on">Desktop</button><button type="button" data-w="mobile">Mobile</button></div><div class="frame-wrap"><iframe id="mk-frame" title="Email preview"></iframe></div></div></div>';
+
+        var frame = $('#mk-frame', el), timer = null, pendingThumb = null;
+        fitFrame(frame);
+        function preview() {
+          clearTimeout(timer);
+          timer = setTimeout(function () { api('mkt.preview', { template: state.template, content: state.content, preheader: $('#mk-pre', el).value }).then(function (p) { frame.srcdoc = p.html; }); }, 350);
+        }
+        function count() { api('mkt.audienceCount', { audience: state.audience }).then(function (r) { $('#mk-count', el).innerHTML = '<b>' + r.count + '</b> ' + (r.count === 1 ? 'person' : 'people') + ' will get this email.'; state.count = r.count; }); }
+        $$('[data-k]', el).forEach(function (inp) {
+          var k = inp.getAttribute('data-k');
+          inp.addEventListener(inp.tagName === 'SELECT' ? 'change' : 'input', function () {
+            if (inp.value === '__upload') { pendingThumb = inp; $('#mk-upload', el).click(); return; }
+            state.content[k] = inp.value;
+            var th = $('[data-thumb="' + k + '"]', el); if (th) th.src = imgSrc(inp.value);
+            preview();
+          });
+        });
+        $('#mk-upload', el).onchange = function () {
+          var input = this, sel = pendingThumb;
+          fileToPayload(input).then(function (file) { return api('mkt.uploadImage', { file: file }); }).then(function (r) {
+            uploads.unshift({ id: Number(r.key.slice(5)), filename: input.files[0].name });
+            $$('select[data-k]', el).forEach(function (s) { var v = s === sel ? r.key : s.value; s.innerHTML = imgOpts(v); });
+            state.content[sel.getAttribute('data-k')] = r.key; $('[data-thumb="' + sel.getAttribute('data-k') + '"]', el).src = imgSrc(r.key);
+            input.value = ''; preview(); toast('Photo uploaded.');
+          }).catch(function (x) { sel.value = state.content[sel.getAttribute('data-k')]; toast(x.message, true); });
+        };
+        $('#mk-pre', el).addEventListener('input', preview);
+        $$('[data-seg]', el).forEach(function (cb) {
+          cb.onchange = function () { var k = cb.getAttribute('data-seg'); state.audience = state.audience.filter(function (x) { return x !== k; }); if (cb.checked) state.audience.push(k); count(); };
+        });
+        $$('[data-w]', $('#mk-view', el)).forEach(function (b) {
+          b.onclick = function () { $$('[data-w]', $('#mk-view', el)).forEach(function (x) { x.classList.toggle('on', x === b); }); $('.frame-wrap', el).classList.toggle('mobile', b.getAttribute('data-w') === 'mobile'); fitFrame(frame); };
+        });
+        function save() {
+          return api('mkt.saveCampaign', { id: state.id, name: $('#mk-name', el).value, subject: $('#mk-subject', el).value, preheader: $('#mk-pre', el).value, template: state.template, content: state.content, audience: state.audience })
+            .then(function (r) { state.id = r.id; c.id = r.id; sessionStorage.setItem('dp_mkt_edit', r.id); return r; });
+        }
+        function err(x) { $('#mk-err', el).textContent = x.message; $$('#mk-save,#mk-test,#mk-send', el).forEach(function (b) { busy(b, false); }); }
+        $('#mk-back', el).onclick = back;
+        $('#mk-tpl', el).onclick = function () {
+          c.subject = $('#mk-subject', el).value; c.preheader = $('#mk-pre', el).value; c.name = $('#mk-name', el).value; c.audience = state.audience;
+          showPicker();
+        };
+        $('#mk-save', el).onclick = function () { var b = this; busy(b, true); save().then(function () { busy(b, false); toast('Draft saved.'); }).catch(err); };
+        $('#mk-test', el).onclick = function () {
+          var m = openModal({ title: 'Send a test', body: '<label class="field">Send the test to<input type="email" id="mt-to" value="' + esc(S.user.email) + '"></label><p class="small muted">The subject starts with [Test]. Links and images work like the real email.</p><p class="error" id="mt-err"></p>',
+            foot: '<button class="btn secondary" data-close type="button">Cancel</button><button class="btn" id="mt-go" type="button">Send test</button>' });
+          $('#mt-go', m).onclick = function () { var b = this; busy(b, true, 'Sending…'); save().then(function () { return api('mkt.sendTest', { id: state.id, to: $('#mt-to', m).value }); }).then(function () { closeModal(); toast('Test sent. Check the inbox.'); }).catch(errIn(m, '#mt-err')); };
+        };
+        $('#mk-send', el).onclick = function () {
+          var b = this;
+          if (!$('#mk-subject', el).value.trim()) { $('#mk-err', el).textContent = 'Add a subject line first.'; return; }
+          if (!state.count) { $('#mk-err', el).textContent = 'Choose an audience with at least one person.'; return; }
+          if (!window.confirm('Send "' + $('#mk-subject', el).value + '" to ' + state.count + ' people now? This cannot be undone.')) return;
+          busy(b, true, 'Sending…');
+          save().then(function () { return sendLoop(state.id, function (p) { b.textContent = 'Sent ' + p.sent + '…'; }); })
+            .then(function (p) { toast(p.failed ? p.sent + ' sent, ' + p.failed + ' failed.' : 'Sent to ' + p.sent + ' people.', !!p.failed); renderShell(); }).catch(err);
+        };
+        preview(); count();
+      }
+    });
+  }
+  // Show the email at its real width (640px desktop, 375px mobile), scaled to fit the preview column.
+  function fitFrame(frame) {
+    var wrap = frame.parentNode;
+    function fit() {
+      if (!document.body.contains(frame)) { window.removeEventListener('resize', fit); return; }
+      var w = wrap.classList.contains('mobile') ? 375 : 640, avail = wrap.clientWidth - 20, k = Math.min(1, avail / w), h = Math.max(520, window.innerHeight - 130);
+      frame.style.width = w + 'px'; frame.style.height = (h / k) + 'px'; frame.style.transform = 'scale(' + k + ')'; frame.style.transformOrigin = '0 0';
+      wrap.style.height = (h + 20) + 'px'; frame.style.marginLeft = Math.max(0, (avail - w * k) / 2) + 'px';
+    }
+    fit(); window.addEventListener('resize', fit);
+  }
+  function sendLoop(id, progress) {
+    return api('mkt.send', { id: id }).then(function (p) {
+      progress(p);
+      if (p.remaining > 0 && !p.lastError) return sendLoop(id, progress);
+      return p;
+    });
+  }
+  function campaignReport(el, data, aud) {
+    var c = data.campaign, s = data.sends;
+    var sent = s.filter(function (x) { return x.status === 'sent'; }).length, opened = s.filter(function (x) { return x.opened_at; }).length;
+    var failed = s.filter(function (x) { return x.status === 'failed'; }).length, queued = s.filter(function (x) { return x.status === 'queued'; }).length;
+    el.innerHTML = head(c.name, 'Subject: ' + esc(c.subject) + ' · sent ' + esc(fmtDate(c.sent_at)), '<button class="btn secondary" id="mk-back" type="button">Back to campaigns</button>' +
+        (queued ? '<button class="btn" id="mk-cont" type="button">Send the remaining ' + queued + '</button>' : '')) +
+      '<div class="stats"><div class="stat"><span class="label">Sent</span><span class="value">' + sent + '</span></div><div class="stat"><span class="label">Opened</span><span class="value">' + opened + '</span><span class="small muted">' + (sent ? Math.round(opened / sent * 100) : 0) + '% of sent</span></div>' +
+      '<div class="stat"><span class="label">Failed</span><span class="value">' + failed + '</span></div><div class="stat"><span class="label">Waiting</span><span class="value">' + queued + '</span></div></div>' +
+      '<div class="mkt-grid"><div>' + table(['Recipient', 'Status', 'Opened'], s.map(function (x) {
+        return '<tr><td><b>' + esc(x.first_name || '') + '</b><div class="small muted">' + esc(x.email) + '</div></td><td>' + (x.status === 'sent' ? '<span class="pill ok">Sent</span>' : x.status === 'failed' ? '<span class="pill bad" title="' + esc(x.error) + '">Failed</span>' : '<span class="pill mute">' + esc(cap(x.status)) + '</span>') +
+          '</td><td>' + (x.opened_at ? esc(fmtDate(x.opened_at)) : '—') + '</td></tr>';
+      }), 'Nobody yet.') + '</div><div class="mkt-preview"><div class="frame-wrap"><iframe id="mk-frame" title="Email preview"></iframe></div></div></div>';
+    $('#mk-back', el).onclick = function () { sessionStorage.removeItem('dp_mkt_edit'); renderShell(); };
+    if ($('#mk-cont', el)) $('#mk-cont', el).onclick = function () { var b = this; busy(b, true, 'Sending…'); sendLoop(c.id, function (p) { b.textContent = 'Sent ' + p.sent + '…'; }).then(function () { renderShell(); }).catch(function (x) { toast(x.message, true); busy(b, false); }); };
+    fitFrame($('#mk-frame', el));
+    api('mkt.preview', { template: c.template, content: c.content, preheader: c.preheader }).then(function (p) { $('#mk-frame', el).srcdoc = p.html; });
+  }
+
+  MKT.audience = function (el) {
+    var seg = sessionStorage.getItem('dp_aud_seg') || 'all';
+    var q = sessionStorage.getItem('dp_aud_q') || '';
+    return api('mkt.contacts').then(function (j) {
+      var segs = j.segments.concat([{ key: 'unsub', label: 'Unsubscribed', count: j.unsubscribed }]);
+      var rows = j.rows.filter(function (c) {
+        if (seg === 'unsub') { if (c.status === 'subscribed') return false; }
+        else if (seg !== 'all') {
+          var t = String(c.tags || '').split(',');
+          if (seg === 'clients' ? !t.some(function (x) { return /client/i.test(x); }) : t.indexOf(seg.slice(4)) === -1) return false;
+        }
+        if (q) { var s = (c.first_name + ' ' + c.last_name + ' ' + c.email + ' ' + c.tags).toLowerCase(); if (s.indexOf(q.toLowerCase()) === -1) return false; }
+        return true;
+      });
+      el.innerHTML = head('Audience', 'Everyone you can email, grouped by tags. Clients are job seeker clients and recruitment clients together.',
+          '<button class="btn secondary" id="au-portal" type="button">Add from portal</button><button class="btn secondary" id="au-import" type="button">Import</button><button class="btn" id="au-add" type="button">+ Add contact</button>') +
+        '<div class="seg">' + segs.map(function (s) { return '<button type="button" data-g="' + esc(s.key) + '" class="' + (seg === s.key ? 'on' : '') + '">' + esc(s.label) + ' (' + s.count + ')</button>'; }).join('') + '</div>' +
+        '<div class="row"><input class="input" id="au-q" placeholder="Search name, email or tag" value="' + esc(q) + '" style="max-width:320px"><span class="small muted">' + rows.length + ' shown</span></div>' +
+        table(['Name', 'Email', 'Tags', 'Status', 'Added', '>'], rows.map(function (c) {
+          return '<tr><td><b>' + esc((c.first_name + ' ' + c.last_name).trim() || '—') + '</b></td><td>' + esc(c.email) + '</td><td>' + tagPills(c.tags) + '</td><td>' +
+            (c.status === 'subscribed' ? '<span class="pill ok">Subscribed</span>' : '<span class="pill mute">Unsubscribed</span>') + '</td><td class="small">' + esc(fmtDate(c.created_at)) +
+            '</td><td><div class="actions"><button class="btn sm" data-c="' + c.id + '" type="button">Edit</button></div></td></tr>';
+        }), 'Nobody here yet.');
+      $$('[data-g]', el).forEach(function (b) { b.onclick = function () { sessionStorage.setItem('dp_aud_seg', b.getAttribute('data-g')); renderShell(); }; });
+      var qt = null;
+      $('#au-q', el).oninput = function () { var v = this.value; clearTimeout(qt); qt = setTimeout(function () { sessionStorage.setItem('dp_aud_q', v); renderShell(); setTimeout(function () { var i = $('#au-q'); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } }, 50); }, 400); };
+      $('#au-add', el).onclick = function () { contactModal(null, j.tags); };
+      $$('[data-c]', el).forEach(function (b) { b.onclick = function () { contactModal(j.rows.filter(function (c) { return c.id === Number(b.getAttribute('data-c')); })[0], j.tags); }; });
+      $('#au-import', el).onclick = function () { importModal(j.tags); };
+      $('#au-portal', el).onclick = function () {
+        var b = this;
+        if (!window.confirm('Add people from the portal?\n\n• CV, interview prep and consultation clients → Job seeker clients\n• Recruitment and HR requests, and client companies → Recruitment clients\n• Newsletter sign-ups → Subscribers, collab requests → Partnership\n\nPeople who unsubscribed stay unsubscribed.')) return;
+        busy(b, true, 'Adding…');
+        api('mkt.importFromPortal').then(function (r) { toast(r.added + ' added, ' + r.updated + ' updated.'); renderShell(); }).catch(function (x) { toast(x.message, true); busy(b, false); });
+      };
+    });
+  };
+  function tagChecks(all, chosen) {
+    return '<div class="checks">' + all.map(function (t) { return '<label class="check"><input type="checkbox" data-tag="' + esc(t) + '"' + (chosen.indexOf(t) > -1 ? ' checked' : '') + '> ' + esc(t) + '</label>'; }).join('') + '</div>';
+  }
+  function contactModal(c, tags) {
+    c = c || { email: '', first_name: '', last_name: '', tags: '', status: 'subscribed', notes: '' };
+    var chosen = String(c.tags || '').split(',').filter(Boolean);
+    var m = openModal({
+      title: c.id ? 'Edit contact' : 'Add a contact',
+      body: '<div class="grid-2"><label class="field">First name<input id="ct-first" value="' + esc(c.first_name) + '"></label><label class="field">Last name<input id="ct-last" value="' + esc(c.last_name) + '"></label></div>' +
+        '<label class="field">Email<input type="email" id="ct-email" value="' + esc(c.email) + '"></label>' +
+        '<div class="field"><span>Tags</span>' + tagChecks(tags, chosen) + '</div><label class="field">Other tags (comma separated)<input id="ct-more" placeholder="e.g. Lagos event 2026"></label>' +
+        '<label class="field">Status<select id="ct-status"><option value="subscribed">Subscribed</option><option value="unsubscribed"' + (c.status !== 'subscribed' ? ' selected' : '') + '>Unsubscribed</option></select></label>' +
+        '<label class="field">Notes<textarea id="ct-notes">' + esc(c.notes || '') + '</textarea></label>' + (c.source ? '<p class="small muted">Source: ' + esc(c.source) + '</p>' : '') + '<p class="error" id="ct-err"></p>',
+      foot: (c.id ? '<button class="btn secondary" id="ct-del" type="button" style="margin-right:auto">Delete</button>' : '') + '<button class="btn secondary" data-close type="button">Cancel</button><button class="btn" id="ct-save" type="button">Save</button>'
+    });
+    $('#ct-save', m).onclick = function () {
+      var b = this; busy(b, true);
+      var t = $$('[data-tag]', m).filter(function (x) { return x.checked; }).map(function (x) { return x.getAttribute('data-tag'); }).concat($('#ct-more', m).value.split(','));
+      api('mkt.saveContact', { id: c.id, email: $('#ct-email', m).value, first_name: $('#ct-first', m).value, last_name: $('#ct-last', m).value, tags: t, status: $('#ct-status', m).value, notes: $('#ct-notes', m).value })
+        .then(after('Saved.')).catch(errIn(m, '#ct-err'));
+    };
+    if ($('#ct-del', m)) $('#ct-del', m).onclick = function () { if (window.confirm('Delete ' + c.email + ' from your audience?')) api('mkt.deleteContact', { id: c.id }).then(after('Deleted.')); };
+  }
+  function parseSheet(text) {
+    var lines = String(text || '').split(/\r?\n/).filter(function (l) { return l.trim(); });
+    if (!lines.length) return [];
+    var delim = lines[0].indexOf('\t') > -1 ? '\t' : ',';
+    var split = function (l) { return l.split(delim).map(function (x) { return x.trim().replace(/^"|"$/g, ''); }); };
+    var headRow = split(lines[0]).map(function (h) { return h.toLowerCase(); });
+    var hasHead = headRow.some(function (h) { return /mail/.test(h); });
+    var idx = function (re, d) { var i = -1; headRow.forEach(function (h, n) { if (i < 0 && re.test(h)) i = n; }); return hasHead ? i : d; };
+    var iE = idx(/mail/, 0), iF = idx(/first/, 1), iL = idx(/last/, 2), iN = idx(/full|^name$/, -1), iT = idx(/tag|categ|group|type/, 3);
+    return lines.slice(hasHead ? 1 : 0).map(split).map(function (c) {
+      return { email: c[iE] || '', first_name: iF > -1 ? c[iF] || '' : '', last_name: iL > -1 ? c[iL] || '' : '', full_name: iN > -1 ? c[iN] || '' : '', tags: iT > -1 ? c[iT] || '' : '' };
+    }).filter(function (r) { return /@/.test(r.email); });
+  }
+  function importModal(tags) {
+    var m = openModal({
+      title: 'Import contacts', wide: true,
+      body: '<p class="small">Copy rows from a spreadsheet (including the header row) and paste them here. Columns we understand: <b>Email address, First name, Last name, Full Name, Tags</b>. Tabs or commas both work.</p>' +
+        '<label class="field">Paste here<textarea id="im-text" rows="10" placeholder="Email address&#9;First name&#9;Last name&#9;Full Name&#9;Tags"></textarea></label>' +
+        '<label class="field">Also add this tag to everyone (optional)<select id="im-tag"><option value="">No extra tag</option>' + tags.map(function (t) { return '<option>' + esc(t) + '</option>'; }).join('') + '</select></label>' +
+        '<p class="small" id="im-count"></p><p class="small muted">Existing contacts keep their details and get any new tags added. People who unsubscribed stay unsubscribed.</p><p class="error" id="im-err"></p>',
+      foot: '<button class="btn secondary" data-close type="button">Cancel</button><button class="btn" id="im-go" type="button">Import</button>'
+    });
+    var rows = [];
+    $('#im-text', m).oninput = function () { rows = parseSheet(this.value); $('#im-count', m).textContent = rows.length + ' contact' + (rows.length === 1 ? '' : 's') + ' found.'; };
+    $('#im-go', m).onclick = function () {
+      if (!rows.length) { $('#im-err', m).textContent = 'Paste at least one row with an email address.'; return; }
+      var extra = $('#im-tag', m).value, b = this; busy(b, true, 'Importing…');
+      api('mkt.importContacts', { rows: rows.map(function (r) { return Object.assign({}, r, { tags: extra ? r.tags + ',' + extra : r.tags }); }) })
+        .then(function (r) { after(r.added + ' added, ' + r.updated + ' updated' + (r.skipped ? ', ' + r.skipped + ' skipped (no valid email)' : '') + '.')(); }).catch(errIn(m, '#im-err'));
+    };
+  }
+
+  ADM.campaigns = MKT.campaigns; ADM.audience = MKT.audience;
+  var VIEWS = { employee: EMP, client: CLI, admin: ADM, media: MKT };
 
   /* ================= boot ================= */
   function start() {

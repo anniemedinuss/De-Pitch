@@ -253,3 +253,26 @@ div.field { display: grid; gap: 6px; font-size: .85rem; font-weight: 500; color:
 div.field .hint { font-weight: 400; }
 #sv-sections { display: grid; gap: 14px; }
 #sv-sections .grid-2, #sv-sections .grid-3 { align-items: start; }
+
+/* email marketing */
+.tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 18px; }
+.tpl-card { display: grid; gap: 6px; text-align: left; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 12px; cursor: pointer; font: inherit; color: inherit; transition: border-color .15s, box-shadow .15s; }
+.tpl-card:hover { border-color: var(--navy); box-shadow: 0 6px 18px rgba(1,29,56,.08); }
+.tpl-card b { font-size: 1rem; margin-top: 4px; }
+.tpl-card span { font-size: .82rem; color: var(--muted); line-height: 1.4; }
+.tpl-thumb { height: 300px; overflow: hidden; border-radius: 10px; background: #f3f3f1; position: relative; }
+.tpl-thumb iframe { width: 640px; height: 1000px; border: 0; transform: scale(.36); transform-origin: 0 0; pointer-events: none; position: absolute; left: 0; top: 0; }
+.mkt-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 460px); gap: 20px; align-items: start; margin-top: 14px; }
+.mkt-grid > .stack { display: grid; gap: 16px; }
+.mkt-grid .panel.stack { display: grid; gap: 12px; }
+.mkt-preview { position: sticky; top: 14px; display: grid; gap: 10px; justify-items: start; }
+.frame-wrap { width: 100%; background: #e9e9e7; border-radius: 14px; padding: 10px; overflow: hidden; }
+.frame-wrap iframe { border: 0; border-radius: 8px; background: #fff; display: block; }
+.img-field .img-row { display: flex; gap: 10px; align-items: center; width: 100%; }
+.img-field .img-row img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; flex: none; background: #eee; }
+.img-field select { flex: 1; }
+div.field select, .img-row select { padding: .6rem .7rem; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: #fff; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.check { display: inline-flex; gap: 6px; align-items: center; font-size: .9rem; cursor: pointer; }
+.tag { display: inline-block; font-size: .74rem; padding: 2px 8px; border-radius: 999px; background: var(--sage-soft); color: var(--navy); margin: 1px 0; white-space: nowrap; }
+@media (max-width: 980px) { .mkt-grid { grid-template-columns: 1fr; } .mkt-preview { position: static; } }

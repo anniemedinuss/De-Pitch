@@ -3,7 +3,8 @@
 // GET  /api/portal?file=ID[&dl=1]               (download a document)
 import crypto from 'node:crypto';
 import { query, one } from './_lib/db.js';
-import { notify, sendEmail, layout, canEmailVisitors, escapeHtml, siteUrl } from './_lib/mail.js';
+import { notify, sendEmail, sendBatch, layout, canEmailVisitors, escapeHtml, siteUrl } from './_lib/mail.js';
+import { TEMPLATES, IMAGE_LIBRARY, renderCampaign, templateById } from './_lib/campaign-templates.js';
 import { pointsEmailHtml } from './_lib/points-email.js';
 import {
   hashPassword, verifyPassword, passwordProblem, tempPassword,
@@ -115,6 +116,7 @@ export default async function handler(req, res) {
     res.setHeader('Referrer-Policy', 'same-origin');
     const reqUrl = new URL(req.url, 'http://x');
     if (reqUrl.searchParams.get('review')) return await handleReview(req, res, reqUrl);
+    if (reqUrl.searchParams.get('unsub') || reqUrl.searchParams.get('o') || reqUrl.searchParams.get('img')) return await handleMarketingGet(req, res, reqUrl);
 
     if (req.method === 'GET') {
       const url = new URL(req.url, 'http://x');
@@ -157,6 +159,7 @@ export default async function handler(req, res) {
     if (area === 'emp' && user.role !== 'employee') return send(res, 403, { error: 'Not allowed.' });
     if (area === 'cli' && user.role !== 'client') return send(res, 403, { error: 'Not allowed.' });
     if (area === 'adm' && user.role !== 'admin') return send(res, 403, { error: 'Not allowed.' });
+    if (area === 'mkt' && !['admin', 'media'].includes(user.role)) return send(res, 403, { error: 'Not allowed.' });
     if (area === 'cli' && !user.client_id) return send(res, 403, { error: 'Your account is not linked to a company yet. Contact People Ops.' });
 
     if (area === 'adm') await sweepChats();
@@ -463,7 +466,7 @@ function userFields(b) {
 }
 
 async function admCreateUser(admin, b) {
-  const role = ['employee', 'client', 'admin'].includes(b.role) ? b.role : fail(400, 'Choose a role.');
+  const role = ['employee', 'client', 'admin', 'media'].includes(b.role) ? b.role : fail(400, 'Choose a role.');
   const e = email(b.email);
   if (!str(b.name)) fail(400, 'Name is required.');
   if (role === 'client' && !b.client_id) fail(400, 'Link the client user to a company.');
@@ -471,7 +474,15 @@ async function admCreateUser(admin, b) {
   const chosen = String(b.password || '');
   if (chosen) { const problem = passwordProblem(chosen); if (problem) fail(400, 'Password: ' + problem); }
   const temp = chosen || tempPassword();
+  // Optionally give the new login the same password as an existing one (e.g. "same as People Ops").
+  const twin = b.password_like ? await one(`SELECT password_hash FROM users WHERE email = $1`, [str(b.password_like, 200).toLowerCase()]) : null;
+  if (b.password_like && !twin) fail(400, 'No login found to copy the password from.');
   const f = userFields(b);
+  if (twin) {
+    const u2 = await one(`INSERT INTO users (email, role, password_hash, must_change, name, job_title, phone, employee_code, start_date, pay_currency, monthly_pay, bill_rate, bank_name, account_number, client_id, created_at)
+      VALUES ($1,$2,$3,FALSE,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`, [e, role, twin.password_hash, ...f, nowIso()]);
+    return { id: u2.id, passwordSet: true };
+  }
   const u = await one(
     `INSERT INTO users (email, role, password_hash, must_change, name, job_title, phone, employee_code, start_date, pay_currency, monthly_pay, bill_rate, bank_name, account_number, client_id, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
@@ -774,6 +785,55 @@ const REWARDS = {
 };
 const CHAT_EMAIL_AFTER_MIN = Number(process.env.CHAT_EMAIL_AFTER_MINUTES || 10);
 const FORMS_EMAIL = process.env.FORMS_EMAIL || 'office@depitchhq.com';
+// Bookable consultation slots (WAT), Monday to Friday.
+const SLOTS = ['11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00', '14:30'];
+const slotLabel = (t) => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${h > 12 ? h - 12 : h}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+// Office hours: Monday to Friday, 10am to 5pm in Lagos (UTC+1, no daylight saving).
+function inOfficeHours(d = new Date()) {
+  const l = new Date(d.getTime() + 3600000);
+  const day = l.getUTCDay(), h = l.getUTCHours();
+  return day >= 1 && day <= 5 && h >= 10 && h < 17;
+}
+const FOLLOWUP_AFTER_HOURS = Number(process.env.FOLLOWUP_AFTER_HOURS || 2);
+const NOT_ENQUIRIES = ['Early access list', 'Scoop newsletter', '10% off popup'];
+async function takenSlots(day) {
+  const rows = await query(`SELECT consult_time FROM enquiries WHERE service <> '' AND LEFT(consult_date, 10) = $1 AND consult_time <> '' AND closed_at = ''`, [day]);
+  return rows.map((r) => r.consult_time);
+}
+async function pubSlots(rq, b) {
+  const day = str(b.date, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return { taken: [] };
+  return { taken: await takenSlots(day) };
+}
+// Ask De Pitch admin on Slack to follow up on a website enquiry.
+async function slackFollowUp(e, why) {
+  const fields = typeof e.fields === 'string' ? json(e.fields, {}) : (e.fields || {});
+  const lines = Object.entries(fields).filter(([, v]) => v).map(([k, v]) => `*${k.replace(/[-_]/g, ' ').replace(/^./, (c) => c.toUpperCase())}:* ${String(v).slice(0, 500)}`);
+  const ok = await postSlack(`Follow up: ${e.form} from ${e.name || e.email}`, [
+    { type: 'header', text: { type: 'plain_text', text: 'Website enquiry: please follow up' } },
+    { type: 'section', text: { type: 'mrkdwn', text: `*${e.form}*  ·  ${why}\n` + lines.join('\n') } },
+    { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open in the portal' }, url: `${assetBase()}/portal#/enquiries` }] }
+  ]);
+  if (ok) await query(`UPDATE enquiries SET followup_at = $1 WHERE id = $2`, [nowIso(), e.id]);
+  return ok;
+}
+async function admEnquiryFollowUp(admin, b) {
+  const e = await one(`SELECT * FROM enquiries WHERE id = $1`, [int(b.id)]);
+  if (!e) fail(404, 'Not found.');
+  if (!process.env.SLACK_WEBHOOK_URL) fail(400, 'Slack is not connected. Add SLACK_WEBHOOK_URL in Vercel.');
+  const ok = await slackFollowUp(e, `sent by ${admin.name || 'People Ops'}`);
+  if (!ok) fail(502, 'Slack did not accept the message. Please try again.');
+  return { ok: true };
+}
+// Website enquiries still "new" after a while, and chats nobody answered, go to Slack.
+async function sweepFollowUps() {
+  if (!process.env.SLACK_WEBHOOK_URL) return 0;
+  const cutoff = new Date(Date.now() - FOLLOWUP_AFTER_HOURS * 3600000).toISOString();
+  const since = new Date(Date.now() - 3 * 86400000).toISOString();
+  const due = await query(`SELECT * FROM enquiries WHERE status = 'new' AND followup_at = '' AND created_at < $1 AND created_at > $2 AND form NOT IN ('Early access list','Scoop newsletter','10% off popup') ORDER BY id LIMIT 5`, [cutoff, since]);
+  for (const e of due) await slackFollowUp(e, `not handled after ${FOLLOWUP_AFTER_HOURS} hours`);
+  return due.length;
+}
 
 function ipOf(req) { return String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim(); }
 async function limit(req, bucket, max, minutes) {
@@ -857,9 +917,17 @@ async function pubForm(rq, b) {
     const day = new Date(cDate + 'T12:00:00Z').getUTCDay();
     if (day === 0 || day === 6) fail(400, 'We book consultations Monday to Friday. Please choose a weekday.');
   }
-  const row = await one(`INSERT INTO enquiries (form, name, email, phone, fields, file_id, page, status, service, consult_date, consult_mode, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'new',$8,$9,$10,$11) RETURNING id`,
-    [form, name, mail, phone, JSON.stringify(fields), fileId, str(b.page, 200), service, cDate, cMode, nowIso()]);
+  const cTime = SLOTS.includes(fields.time_of_consultation) ? fields.time_of_consultation : '';
+  if (fields.time_of_consultation && !cTime) fail(400, 'Please choose a time between 11am and 3pm.');
+  if (cTime) {
+    fields.time_of_consultation = slotLabel(cTime) + ' (WAT)';
+    if ((await takenSlots(cDate)).includes(cTime)) fail(409, 'Sorry, that time was just booked. Please choose another time.');
+  }
+  const row = await one(`INSERT INTO enquiries (form, name, email, phone, fields, file_id, page, status, service, consult_date, consult_mode, consult_time, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'new',$8,$9,$10,$11,$12) RETURNING *`,
+    [form, name, mail, phone, JSON.stringify(fields), fileId, str(b.page, 200), service, cDate, cMode, cTime, nowIso()]);
   await notify(`Website form: ${form}`, { ...fields, 'CV / file': fileId ? 'Uploaded. Open it in the portal under Website enquiries.' : '' }, FORMS_EMAIL);
+  if (!NOT_ENQUIRIES.includes(form) && !inOfficeHours()) await slackFollowUp(row, 'sent after working hours');
+  await addContactFromForm(form, service, name, mail);
   return { ok: true, id: row.id };
 }
 
@@ -970,8 +1038,14 @@ async function sweepChats() {
     const msgs = (await chatMessages(c.id)).slice(-15);
     const transcript = msgs.map((m) => `${m.sender === 'visitor' ? c.name : 'Dé Pitch'}: ${m.body}`).join('\n\n');
     await notifyHR(`Unanswered website chat from ${c.name}`, { Name: c.name, Email: c.email, 'Waiting since': c.last_visitor_msg.replace('T', ' ').slice(0, 16) + ' UTC', Conversation: transcript, Reply: 'Open the portal → Live chat to reply. Your reply appears in their chat window.' });
+    await postSlack(`Follow up: unanswered chat from ${c.name}`, [
+      { type: 'header', text: { type: 'plain_text', text: 'Website chat: please follow up' } },
+      { type: 'section', text: { type: 'mrkdwn', text: `*Name:* ${c.name}\n*Email:* ${c.email}\n*Waiting since:* ${c.last_visitor_msg.replace('T', ' ').slice(0, 16)} UTC${inOfficeHours() ? '' : ' (after hours)'}\n\n${transcript.slice(-2500)}` } },
+      { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Reply in the portal' }, url: `${assetBase()}/portal#/chat` }] }
+    ]);
     n++;
   }
+  n += await sweepFollowUps();
   return n;
 }
 
@@ -1129,7 +1203,7 @@ async function admSettings() {
 }
 
 const PUBLIC = {
-  'public.form': pubForm, 'public.points': pubPoints, 'public.pointsClaim': pubPointsClaim, 'public.redeem': pubRedeem,
+  'public.form': pubForm, 'public.slots': pubSlots, 'public.points': pubPoints, 'public.pointsClaim': pubPointsClaim, 'public.redeem': pubRedeem,
   'public.chatStart': pubChatStart, 'public.chatSend': pubChatSend, 'public.chatPoll': pubChatPoll
 };
 
@@ -1265,6 +1339,7 @@ async function admSaveService(admin, b) {
   const today = new Date().toISOString().slice(0, 10);
   const vals = {
     consult_date: str(b.consult_date, 16).replace('T', ' '), consult_mode: str(b.consult_mode, 40),
+    consult_time: SLOTS.includes(b.consult_time) || /^\d{2}:\d{2}$/.test(b.consult_time || '') ? b.consult_time : '',
     consult_done_at: d('consult_done_at', 'Consultation date'),
     paid_at: service === 'consultation' ? '' : b.paid ? ((e && e.paid_at) || today) : '',
     session_date: service === 'interview' ? d('session_date', 'Session date') : '',
@@ -1288,9 +1363,9 @@ async function admSaveService(admin, b) {
   }
   if (b.file) resultFile = await saveFile(b.file, { title: `Finished ${SERVICE_LABEL[service]}: ${b.name || (e && e.name) || ''}`, category: service === 'cv' ? 'Finished CV' : 'Service file', uploaded_by: admin.id });
   await query(`UPDATE enquiries SET service=$1, consult_date=$2, consult_mode=$3, consult_done_at=$4, paid_at=$5, session_date=$6, interest=$7, done_at=$8, delivered_at=$9,
-      closed_at=$10, track_notes=$11, result_file_id=$12, review_status=$13, reviewed_at=$14, status='handled', updated_at=$15 WHERE id=$16`,
+      closed_at=$10, track_notes=$11, result_file_id=$12, review_status=$13, reviewed_at=$14, status='handled', updated_at=$15, consult_time=$17 WHERE id=$16`,
     [service, vals.consult_date, vals.consult_mode, vals.consult_done_at, vals.paid_at, vals.session_date, vals.interest, vals.done_at, vals.delivered_at,
-      vals.closed_at, vals.track_notes, resultFile, vals.review_status, reviewedAt, nowIso(), newId]);
+      vals.closed_at, vals.track_notes, resultFile, vals.review_status, reviewedAt, nowIso(), newId, vals.consult_time]);
   let fresh = await one(`SELECT * FROM enquiries WHERE id = $1`, [newId]);
   let slack = null;
   const justDone = fresh.done_at && (!e || !e.done_at);
@@ -1304,6 +1379,259 @@ async function admSaveService(admin, b) {
     fresh = await one(`SELECT * FROM enquiries WHERE id = $1`, [newId]);
   }
   return { id: newId, stage: stageOf(fresh), slack, slackOn: !!process.env.SLACK_WEBHOOK_URL };
+}
+
+
+/* ================= email marketing (People Ops and Media) ================= */
+const TAGS = ['Jobseeker Client', 'Recruitment Client', 'Partnership', 'Employee', 'Co Founder', 'Subscriber'];
+const SEGMENTS = [
+  ['all', 'Everyone'], ['clients', 'All clients (general)'], ['tag:Jobseeker Client', 'Job seeker clients'], ['tag:Recruitment Client', 'Recruitment clients'],
+  ['tag:Partnership', 'Partnership'], ['tag:Employee', 'Employees'], ['tag:Co Founder', 'Co-founders'], ['tag:Subscriber', 'Newsletter subscribers']
+];
+function normTag(t) {
+  const x = str(t, 60).replace(/\s+/g, ' ');
+  if (!x) return '';
+  const k = x.toLowerCase().replace(/[^a-z]/g, '');
+  if (/^jobseeker|^jobseekers/.test(k)) return 'Jobseeker Client';
+  if (/^recruitment/.test(k)) return 'Recruitment Client';
+  if (/^partner/.test(k) || k === 'collab' || k === 'collaboration') return 'Partnership';
+  if (/^employee|^staff|^talent$/.test(k)) return 'Employee';
+  if (/^cofounder|^founder/.test(k)) return 'Co Founder';
+  if (/^subscriber|^newsletter/.test(k)) return 'Subscriber';
+  return TAGS.find((t) => t.toLowerCase() === x.toLowerCase()) || x.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+const tagList = (v) => [...new Set((Array.isArray(v) ? v : String(v || '').split(/[,;|]/)).map(normTag).filter(Boolean))];
+const tagsOf = (c) => String(c.tags || '').split(',').filter(Boolean);
+function matchesAudience(c, aud) {
+  if (c.status !== 'subscribed') return false;
+  const segs = Array.isArray(aud) ? aud : [];
+  const t = tagsOf(c);
+  return segs.some((s) => s === 'all' || (s === 'clients' && t.some((x) => /client/i.test(x))) || (s.startsWith('tag:') && t.includes(s.slice(4))));
+}
+const mktSig = (s) => crypto.createHmac('sha256', process.env.SESSION_SECRET || 'dev').update(s).digest('hex').slice(0, 32);
+const unsubUrl = (id) => `${assetBase()}/api/portal?unsub=${id}&k=${mktSig('unsub:' + id)}`;
+const pixelUrl = (cid, id) => `${assetBase()}/api/portal?o=${cid}.${id}.${mktSig('open:' + cid + ':' + id)}`;
+
+async function upsertContact({ email: mail, first_name, last_name, tags, source }) {
+  let e;
+  try { e = email(mail); } catch (x) { return 'skipped'; }
+  const now = nowIso();
+  const ex = await one(`SELECT * FROM contacts WHERE email = $1`, [e]);
+  const add = tagList(tags);
+  if (!ex) {
+    await query(`INSERT INTO contacts (email, first_name, last_name, tags, status, source, created_at, updated_at) VALUES ($1,$2,$3,$4,'subscribed',$5,$6,$6)`,
+      [e, str(first_name, 80), str(last_name, 80), add.join(','), str(source, 60), now]);
+    return 'added';
+  }
+  const merged = [...new Set([...tagsOf(ex), ...add])].join(',');
+  await query(`UPDATE contacts SET tags = $1, first_name = COALESCE(NULLIF(first_name, ''), $2), last_name = COALESCE(NULLIF(last_name, ''), $3), updated_at = $4 WHERE id = $5`,
+    [merged, str(first_name, 80), str(last_name, 80), now, ex.id]);
+  return 'updated';
+}
+function splitName(n) { const p = str(n, 160).split(/\s+/).filter(Boolean); return { first_name: p[0] || '', last_name: p.slice(1).join(' ') }; }
+
+// Sign-ups from the website join the audience: newsletter forms as subscribers, collab requests as partnerships.
+async function addContactFromForm(form, service, name, mail) {
+  const tag = ['Early access list', 'Scoop newsletter', '10% off popup'].includes(form) ? 'Subscriber' : form === 'Collab request' ? 'Partnership' : '';
+  if (!tag || !mail) return;
+  try { await upsertContact({ email: mail, ...splitName(name), tags: [tag], source: form }); } catch (e) { console.error('contact', e.message); }
+}
+
+async function mktContacts() {
+  const rows = await query(`SELECT * FROM contacts ORDER BY id DESC LIMIT 5000`);
+  const segments = SEGMENTS.map(([k, label]) => ({ key: k, label, count: rows.filter((c) => matchesAudience(c, [k])).length }));
+  const custom = [...new Set(rows.flatMap(tagsOf))].filter((t) => !TAGS.includes(t));
+  for (const t of custom) segments.push({ key: 'tag:' + t, label: t, count: rows.filter((c) => matchesAudience(c, ['tag:' + t])).length });
+  return { rows, segments, tags: [...TAGS, ...custom], unsubscribed: rows.filter((c) => c.status !== 'subscribed').length };
+}
+async function mktSaveContact(u, b) {
+  const id = int(b.id);
+  const e = email(b.email);
+  const dupe = await one(`SELECT id FROM contacts WHERE email = $1`, [e]);
+  if (dupe && Number(dupe.id) !== id) fail(400, 'That email is already in your audience.');
+  const tags = tagList(b.tags).join(','), status = b.status === 'unsubscribed' ? 'unsubscribed' : 'subscribed';
+  if (id) {
+    await query(`UPDATE contacts SET email=$1, first_name=$2, last_name=$3, tags=$4, status=$5, notes=$6, updated_at=$7,
+      unsubscribed_at = CASE WHEN $5 = 'unsubscribed' AND status <> 'unsubscribed' THEN $7 WHEN $5 = 'subscribed' THEN '' ELSE unsubscribed_at END WHERE id=$8`,
+      [e, str(b.first_name, 80), str(b.last_name, 80), tags, status, str(b.notes, 500), nowIso(), id]);
+    return { id };
+  }
+  const r = await one(`INSERT INTO contacts (email, first_name, last_name, tags, status, notes, source, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,'Added by hand',$7,$7) RETURNING id`,
+    [e, str(b.first_name, 80), str(b.last_name, 80), tags, status, str(b.notes, 500), nowIso()]);
+  return { id: r.id };
+}
+async function mktDeleteContact(u, b) { await query(`DELETE FROM contacts WHERE id = $1`, [int(b.id)]); return { ok: true }; }
+async function mktImportContacts(u, b) {
+  const rows = Array.isArray(b.rows) ? b.rows.slice(0, 5000) : [];
+  const out = { added: 0, updated: 0, skipped: 0 };
+  for (const r of rows) {
+    let first = str(r.first_name, 80), last = str(r.last_name, 80);
+    if (!first && !last && r.full_name) ({ first_name: first, last_name: last } = splitName(r.full_name));
+    if (first && !last && r.full_name) { const rest = str(r.full_name, 160).replace(new RegExp('^' + first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*', 'i'), ''); if (rest && rest !== str(r.full_name, 160)) last = rest; }
+    const tidy = (x) => (x && x === x.toLowerCase() ? x.replace(/\b\w/g, (ch) => ch.toUpperCase()) : x);
+    first = tidy(first); last = tidy(last);
+    out[await upsertContact({ email: r.email, first_name: first, last_name: last, tags: r.tags, source: 'Import' })]++;
+  }
+  return out;
+}
+async function mktImportFromPortal() {
+  const out = { added: 0, updated: 0, skipped: 0 };
+  const svc = await query(`SELECT name, email, service FROM enquiries WHERE service <> '' AND email <> ''`);
+  for (const r of svc) out[await upsertContact({ email: r.email, ...splitName(r.name), tags: [['recruitment', 'hcm'].includes(r.service) ? 'Recruitment Client' : 'Jobseeker Client'], source: 'Services' })]++;
+  const cl = await query(`SELECT name, contact_name, contact_email FROM clients WHERE contact_email <> ''`);
+  for (const r of cl) out[await upsertContact({ email: r.contact_email, ...splitName(r.contact_name || r.name), tags: ['Recruitment Client'], source: 'Clients' })]++;
+  const sub = await query(`SELECT form, name, email FROM enquiries WHERE email <> '' AND form IN ('Early access list','Scoop newsletter','10% off popup','Collab request')`);
+  for (const r of sub) out[await upsertContact({ email: r.email, ...splitName(r.name), tags: [r.form === 'Collab request' ? 'Partnership' : 'Subscriber'], source: r.form })]++;
+  return out;
+}
+
+async function mktTemplates() { return { templates: TEMPLATES, images: IMAGE_LIBRARY, assetBase: assetBase() }; }
+function renderFor(c, contact, preview) {
+  return renderCampaign(c.template, typeof c.content === 'string' ? json(c.content, {}) : (c.content || {}), {
+    firstName: contact ? contact.first_name : 'Annie', assetBase: assetBase(), siteUrl: 'https://www.depitchhq.com', preheader: c.preheader,
+    unsubUrl: contact && contact.id ? unsubUrl(contact.id) : '#', pixelUrl: !preview && contact && contact.id && c.id ? pixelUrl(c.id, contact.id) : ''
+  });
+}
+async function mktPreview(u, b) {
+  return { html: renderFor({ template: str(b.template, 30), content: b.content || {}, preheader: str(b.preheader, 200) }, { first_name: str(b.first_name, 60) || 'Annie' }, true) };
+}
+async function mktCampaigns() {
+  const rows = await query(`SELECT c.id, c.name, c.subject, c.template, c.audience, c.status, c.sent_count, c.failed_count, c.sent_at, c.created_at, c.updated_at,
+      (SELECT COUNT(*)::int FROM campaign_sends s WHERE s.campaign_id = c.id AND s.opened_at <> '') AS opens,
+      (SELECT COUNT(*)::int FROM campaign_sends s WHERE s.campaign_id = c.id AND s.status = 'queued') AS queued
+    FROM campaigns c ORDER BY c.id DESC LIMIT 300`);
+  return { rows: rows.map((r) => ({ ...r, audience: json(r.audience, []) })), segments: SEGMENTS.map(([key, label]) => ({ key, label })) };
+}
+async function mktCampaign(u, b) {
+  const c = await one(`SELECT * FROM campaigns WHERE id = $1`, [int(b.id)]);
+  if (!c) fail(404, 'Campaign not found.');
+  const sends = await query(`SELECT email, first_name, status, error, sent_at, opened_at FROM campaign_sends WHERE campaign_id = $1 ORDER BY email LIMIT 5000`, [c.id]);
+  return { campaign: { ...c, content: json(c.content, {}), audience: json(c.audience, []) }, sends };
+}
+async function mktSaveCampaign(u, b) {
+  const id = int(b.id);
+  if (id) {
+    const ex = await one(`SELECT status FROM campaigns WHERE id = $1`, [id]);
+    if (!ex) fail(404, 'Campaign not found.');
+    if (ex.status !== 'draft') fail(400, 'This campaign has already been sent. Duplicate it to send again.');
+  }
+  const tpl = templateById(str(b.template, 30)).id;
+  const content = {};
+  for (const fd of templateById(tpl).fields) if (b.content && b.content[fd.key] != null) content[fd.key] = str(b.content[fd.key], 4000);
+  const aud = (Array.isArray(b.audience) ? b.audience : []).map((x) => str(x, 80)).filter(Boolean);
+  const vals = [str(b.name, 160) || str(b.subject, 160) || 'Untitled campaign', str(b.subject, 200), str(b.preheader, 200), tpl, JSON.stringify(content), JSON.stringify(aud), nowIso()];
+  if (id) { await query(`UPDATE campaigns SET name=$1, subject=$2, preheader=$3, template=$4, content=$5, audience=$6, updated_at=$7 WHERE id=$8`, [...vals, id]); return { id }; }
+  const r = await one(`INSERT INTO campaigns (name, subject, preheader, template, content, audience, updated_at, created_at, created_by, status) VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,'draft') RETURNING id`, [...vals, u.id || null]);
+  return { id: r.id };
+}
+async function mktDuplicate(u, b) {
+  const c = await one(`SELECT * FROM campaigns WHERE id = $1`, [int(b.id)]);
+  if (!c) fail(404, 'Campaign not found.');
+  const r = await one(`INSERT INTO campaigns (name, subject, preheader, template, content, audience, status, created_at, updated_at, created_by) VALUES ($1,$2,$3,$4,$5,$6,'draft',$7,$7,$8) RETURNING id`,
+    [c.name + ' (copy)', c.subject, c.preheader, c.template, c.content, c.audience, nowIso(), u.id || null]);
+  return { id: r.id };
+}
+async function mktDeleteCampaign(u, b) {
+  const id = int(b.id);
+  await query(`DELETE FROM campaign_sends WHERE campaign_id = $1`, [id]);
+  await query(`DELETE FROM campaigns WHERE id = $1`, [id]);
+  return { ok: true };
+}
+async function mktAudienceCount(u, b) {
+  const rows = await query(`SELECT id, tags, status FROM contacts`);
+  return { count: rows.filter((c) => matchesAudience(c, b.audience)).length };
+}
+async function mktSendTest(u, b) {
+  const to = email(b.to);
+  const c = await one(`SELECT * FROM campaigns WHERE id = $1`, [int(b.id)]);
+  if (!c) fail(404, 'Save the campaign first.');
+  if (!c.subject) fail(400, 'Add a subject line first.');
+  const contact = (await one(`SELECT * FROM contacts WHERE email = $1`, [to])) || { first_name: str(b.first_name, 60) || (u.name || '').split(' ')[0] || 'there' };
+  const r = await sendBatch([{ to, subject: '[Test] ' + c.subject.replace(/\{\{\s*first_name\s*\}\}/gi, contact.first_name || 'there'), html: renderFor({ ...c, id: 0 }, contact, true), replyTo: FORMS_EMAIL }]);
+  if (!r.ok) fail(502, r.error);
+  return { ok: true };
+}
+async function mktProcess(c) {
+  const start = Date.now();
+  const content = json(c.content, {});
+  let sent = 0, failed = 0;
+  while (Date.now() - start < 9000) {
+    const batch = await query(`SELECT s.*, ct.status AS cstatus FROM campaign_sends s JOIN contacts ct ON ct.id = s.contact_id WHERE s.campaign_id = $1 AND s.status = 'queued' ORDER BY s.contact_id LIMIT 50`, [c.id]);
+    if (!batch.length) break;
+    const live = batch.filter((s) => s.cstatus === 'subscribed');
+    const skipped = batch.filter((s) => s.cstatus !== 'subscribed');
+    for (const s of skipped) await query(`UPDATE campaign_sends SET status = 'skipped', error = 'Unsubscribed' WHERE campaign_id = $1 AND contact_id = $2`, [c.id, s.contact_id]);
+    if (live.length) {
+      const r = await sendBatch(live.map((s) => ({
+        to: s.email, subject: c.subject.replace(/\{\{\s*first_name\s*\}\}/gi, s.first_name || 'there'), replyTo: FORMS_EMAIL,
+        html: renderFor({ ...c, content }, { id: s.contact_id, first_name: s.first_name }, false),
+        headers: { 'List-Unsubscribe': `<${unsubUrl(s.contact_id)}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' }
+      })));
+      const st = r.ok ? 'sent' : 'failed';
+      const ids = live.map((s) => s.contact_id);
+      await query(`UPDATE campaign_sends SET status = $1, error = $2, sent_at = $3 WHERE campaign_id = $4 AND contact_id IN (${ids.map((x) => int(x)).join(',')})`, [st, r.ok ? '' : r.error, nowIso(), c.id]);
+      if (r.ok) sent += live.length; else { failed += live.length; break; }
+    }
+  }
+  const t = await one(`SELECT COUNT(*) FILTER (WHERE status = 'sent')::int AS sent, COUNT(*) FILTER (WHERE status = 'failed')::int AS failed, COUNT(*) FILTER (WHERE status = 'queued')::int AS queued FROM campaign_sends WHERE campaign_id = $1`, [c.id]);
+  await query(`UPDATE campaigns SET sent_count = $1, failed_count = $2, status = $3, updated_at = $4 WHERE id = $5`, [t.sent, t.failed, t.queued ? 'sending' : 'sent', nowIso(), c.id]);
+  return { sent: t.sent, failed: t.failed, remaining: t.queued, lastError: failed ? 'Some emails could not be sent. Check the Resend dashboard.' : '' };
+}
+async function mktSend(u, b) {
+  const c = await one(`SELECT * FROM campaigns WHERE id = $1`, [int(b.id)]);
+  if (!c) fail(404, 'Campaign not found.');
+  if (c.status === 'sent') fail(400, 'This campaign was already sent.');
+  if (!c.subject) fail(400, 'Add a subject line first.');
+  if (!process.env.RESEND_API_KEY) fail(400, 'Email sending is not set up yet (RESEND_API_KEY).');
+  if (c.status === 'draft') {
+    const contacts = (await query(`SELECT * FROM contacts WHERE status = 'subscribed'`)).filter((x) => matchesAudience(x, json(c.audience, [])));
+    if (!contacts.length) fail(400, 'Nobody in this audience yet.');
+    for (const x of contacts) {
+      await query(`INSERT INTO campaign_sends (campaign_id, contact_id, email, first_name, status) VALUES ($1,$2,$3,$4,'queued') ON CONFLICT DO NOTHING`, [c.id, x.id, x.email, x.first_name]);
+    }
+    await query(`UPDATE campaigns SET status = 'sending', sent_at = $1 WHERE id = $2`, [nowIso(), c.id]);
+    c.status = 'sending';
+  }
+  return mktProcess(c);
+}
+async function mktUploadImage(u, b) {
+  if (!b.file || !/^image\/(png|jpeg|webp)$/.test(b.file.type || '')) fail(400, 'Upload a JPG, PNG or WebP image.');
+  const id = await saveFile(b.file, { title: 'Email image: ' + str(b.file.name, 100), category: 'Email image', uploaded_by: u.id || null });
+  return { key: 'file:' + id };
+}
+async function mktImages() {
+  return { rows: await query(`SELECT id, filename, created_at FROM files WHERE category = 'Email image' ORDER BY id DESC LIMIT 100`) };
+}
+
+// Public routes used from inside sent emails: unsubscribe, open pixel and uploaded images.
+async function handleMarketingGet(req, res, url) {
+  if (url.searchParams.get('img')) {
+    const f = await one(`SELECT mime, data FROM files WHERE id = $1 AND category = 'Email image'`, [int(url.searchParams.get('img'))]);
+    if (!f) { res.statusCode = 404; return res.end(); }
+    const buf = Buffer.from(f.data, 'base64');
+    res.statusCode = 200; res.setHeader('Content-Type', f.mime); res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return res.end(buf);
+  }
+  if (url.searchParams.get('o')) {
+    const [cid, id, sig] = String(url.searchParams.get('o')).split('.');
+    if (sig && sig === mktSig('open:' + int(cid) + ':' + int(id))) {
+      await query(`UPDATE campaign_sends SET opened_at = $1 WHERE campaign_id = $2 AND contact_id = $3 AND opened_at = ''`, [nowIso(), int(cid), int(id)]).catch(() => {});
+    }
+    res.statusCode = 200; res.setHeader('Content-Type', 'image/gif'); res.setHeader('Cache-Control', 'no-store');
+    return res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+  }
+  const id = int(url.searchParams.get('unsub'));
+  const ok = id && String(url.searchParams.get('k') || '') === mktSig('unsub:' + id);
+  const c = ok ? await one(`SELECT * FROM contacts WHERE id = $1`, [id]) : null;
+  if (!c) return reviewPage(res, 404, 'Link expired', '<h1>This link is not valid</h1><p class="muted">Email office@depitchhq.com and we will take you off our list.</p>');
+  const self = `/api/portal?unsub=${id}&k=${mktSig('unsub:' + id)}`;
+  if (req.method === 'POST') {
+    await query(`UPDATE contacts SET status = 'unsubscribed', unsubscribed_at = $1, updated_at = $1 WHERE id = $2`, [nowIso(), id]);
+    return reviewPage(res, 200, 'Unsubscribed', `<h1>You are unsubscribed</h1><p>${escapeHtml(c.email)} will not get Dé Pitch marketing emails again.</p><p class="muted">Changed your mind? Email office@depitchhq.com.</p>`);
+  }
+  if (c.status !== 'subscribed') return reviewPage(res, 200, 'Unsubscribed', `<h1>You are already unsubscribed</h1><p class="muted">${escapeHtml(c.email)} will not get our marketing emails.</p>`);
+  return reviewPage(res, 200, 'Unsubscribe', `<h1>Unsubscribe from Dé Pitch emails?</h1><p class="muted">${escapeHtml(c.email)} will stop getting our newsletters and offers.</p>
+    <form method="POST" action="${self}"><div class="row"><button class="ch" type="submit">Unsubscribe</button></div></form>`);
 }
 
 /* ---------- notification counts for employees and clients ---------- */
@@ -1346,6 +1674,10 @@ async function meSeen(u, b) {
 
 const ACTIONS = {
   'me.counts': meCounts, 'me.seen': meSeen,
+  'mkt.contacts': mktContacts, 'mkt.saveContact': mktSaveContact, 'mkt.deleteContact': mktDeleteContact, 'mkt.importContacts': mktImportContacts,
+  'mkt.importFromPortal': mktImportFromPortal, 'mkt.templates': mktTemplates, 'mkt.preview': mktPreview, 'mkt.campaigns': mktCampaigns,
+  'mkt.campaign': mktCampaign, 'mkt.saveCampaign': mktSaveCampaign, 'mkt.duplicate': mktDuplicate, 'mkt.deleteCampaign': mktDeleteCampaign,
+  'mkt.audienceCount': mktAudienceCount, 'mkt.sendTest': mktSendTest, 'mkt.send': mktSend, 'mkt.uploadImage': mktUploadImage, 'mkt.images': mktImages,
   'emp.dashboard': empDashboard, 'emp.payroll': empPayroll, 'emp.payslip': empPayslip,
   'emp.reports': empReports, 'emp.submitReport': empSubmitReport,
   'emp.requests': empRequests, 'emp.submitRequest': empSubmitRequest, 'emp.documents': empDocuments,
@@ -1366,7 +1698,7 @@ const ACTIONS = {
   'adm.feedback': admFeedback, 'adm.updateFeedback': admUpdateFeedback,
   'adm.files': admFiles, 'adm.uploadDocument': admUploadDocument, 'adm.deleteFile': admDeleteFile,
   'emp.referrals': empReferrals, 'emp.submitReferral': empSubmitReferral,
-  'adm.enquiries': admEnquiries, 'adm.enquiryStatus': admEnquiryStatus, 'adm.referrals': admReferrals, 'adm.updateReferral': admUpdateReferral,
+  'adm.enquiries': admEnquiries, 'adm.enquiryStatus': admEnquiryStatus, 'adm.enquiryFollowUp': admEnquiryFollowUp, 'adm.referrals': admReferrals, 'adm.updateReferral': admUpdateReferral,
   'adm.points': admPoints, 'adm.reviewClaim': admReviewClaim, 'adm.awardPoints': admAwardPoints, 'adm.updateRedemption': admUpdateRedemption,
   'adm.chats': admChats, 'adm.chat': admChat, 'adm.chatReply': admChatReply, 'adm.chatStatus': admChatStatus, 'adm.services': admServices, 'adm.saveService': admSaveService, 'adm.deleteService': admDeleteService, 'adm.settings': admSettings, 'adm.testPointsEmail': admTestPointsEmail,
   'adm.announcements': admAnnouncements, 'adm.saveAnnouncement': admSaveAnnouncement, 'adm.deleteAnnouncement': admDeleteAnnouncement

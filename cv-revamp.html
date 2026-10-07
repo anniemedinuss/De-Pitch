@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/style.css?v=10072343">
+  <link rel="stylesheet" href="assets/style.css?v=10080023">
 </head>
 <body data-page="cvrevamp">
 
@@ -82,6 +82,18 @@
   </select>
   <label class="field-label">Preferred date of consultation</label>
   <input type="date" name="date_of_consultation" required aria-label="Date of consultation">
+  <label class="field-label">Preferred time (WAT)</label>
+  <select name="time_of_consultation" required aria-label="Time of consultation">
+    <option value="" disabled selected>– Choose a time –</option>
+    <option value="11:00">11:00 AM</option>
+    <option value="11:30">11:30 AM</option>
+    <option value="12:00">12:00 PM</option>
+    <option value="12:30">12:30 PM</option>
+    <option value="13:00">1:00 PM</option>
+    <option value="13:30">1:30 PM</option>
+    <option value="14:00">2:00 PM</option>
+    <option value="14:30">2:30 PM</option>
+  </select>
   <label class="field-label">Upload your CV (PDF)</label>
   <input type="file" name="attachment" accept="application/pdf,.pdf" required aria-label="Upload CV, PDF version">
   <input type="text" name="additional_information" placeholder="Additional Information (optional)" maxlength="256" aria-label="Additional information">
@@ -108,6 +120,10 @@
       <article class="review">
         <header><div class="avatar">JO</div><div class="who"><b>Joyce Okoye</b><span>Google review</span></div></header>
         <p>“Great review of my CV, quite helpful tips. I would definitely recommend.”</p>
+      </article>
+      <article class="review">
+        <header><div class="avatar">EE</div><div class="who"><b>Ekpo Emem</b><span>Google review</span></div></header>
+        <p>“Very efficient.”</p>
       </article>
     </div>
   </div>
@@ -230,6 +246,6 @@
   </div>
 </div>
 
-<script src="assets/app.js?v=10072343"></script>
+<script src="assets/app.js?v=10080023"></script>
 </body>
 </html>

@@ -51,6 +51,27 @@ export async function sendEmail({ to, subject, html, text, replyTo }) {
   }
 }
 
+// Marketing: send up to 100 personalised emails in one Resend call.
+export async function sendBatch(list) {
+  if (!process.env.RESEND_API_KEY || !list.length) return { ok: false, error: 'Email sending is not set up (RESEND_API_KEY).' };
+  const from = process.env.MARKETING_FROM || FROM();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 12000);
+    const r = await fetch((process.env.RESEND_BASE || 'https://api.resend.com') + '/emails/batch', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(list.map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html, reply_to: m.replyTo || undefined, headers: m.headers || undefined }))),
+      signal: ctrl.signal
+    });
+    clearTimeout(t);
+    if (!r.ok) { const txt = await r.text().catch(() => ''); console.error('Resend batch', r.status, txt); return { ok: false, error: `Resend said ${r.status}: ${txt.slice(0, 200)}` }; }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: 'Could not reach Resend.' };
+  }
+}
+
 // Alert one of Dé Pitch's own inboxes (People Ops or office@).
 export async function notify(subject, fields, to) {
   if (process.env.NOTIFY_HR === 'off') return false;

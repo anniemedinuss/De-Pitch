@@ -69,19 +69,36 @@
     }
     input.value = value;
   }
-  // Consultations are Monday to Friday only.
+  // Consultations are Monday to Friday, 11am to 3pm (WAT), in 30-minute slots. Booked slots are greyed out.
   document.querySelectorAll('input[type="date"][name="date_of_consultation"]').forEach(function (inp) {
+    var form = inp.form, timeSel = form && form.querySelector('select[name="time_of_consultation"]');
     var t = new Date(); t.setDate(t.getDate() + 1);
     inp.min = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
-    var hint = document.createElement('p'); hint.className = 'small date-hint'; hint.textContent = 'Monday to Friday only.'; inp.insertAdjacentElement('afterend', hint);
+    var hint = document.createElement('p'); hint.className = 'small date-hint'; inp.insertAdjacentElement('afterend', hint);
+    var BASE = 'Monday to Friday, 11am to 3pm.';
+    hint.textContent = BASE;
+    function loadSlots(day) {
+      if (!timeSel) return;
+      Array.prototype.forEach.call(timeSel.options, function (o) { if (o.value) { o.dataset.label = o.dataset.label || o.textContent; o.disabled = false; o.textContent = o.dataset.label; } });
+      if (!day) return;
+      fetch('/api/portal', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Portal': '1' }, body: JSON.stringify({ action: 'public.slots', date: day }) })
+        .then(function (r) { return r.json(); }).then(function (j) {
+          if (inp.value !== day) return;
+          var taken = j.taken || [];
+          Array.prototype.forEach.call(timeSel.options, function (o) {
+            if (o.value && taken.indexOf(o.value) > -1) { o.disabled = true; o.textContent = o.dataset.label + ' (booked)'; if (timeSel.value === o.value) timeSel.value = ''; }
+          });
+          if (taken.length >= timeSel.options.length - 1) { inp.setCustomValidity('That day is fully booked. Please choose another weekday.'); hint.textContent = 'That day is fully booked. Please choose another weekday.'; hint.classList.add('bad'); }
+        }).catch(function () {});
+    }
     function check() {
       var v = inp.value, msg = '';
       if (v) { var d = new Date(v + 'T12:00:00').getDay(); if (d === 0 || d === 6) msg = 'We book consultations Monday to Friday. Please choose a weekday.'; }
       inp.setCustomValidity(msg);
-      hint.textContent = msg || 'Monday to Friday only.'; hint.classList.toggle('bad', !!msg);
-      if (msg) inp.reportValidity();
+      hint.textContent = msg || BASE; hint.classList.toggle('bad', !!msg);
+      if (msg) inp.reportValidity(); else loadSlots(v);
     }
-    inp.addEventListener('change', check); inp.addEventListener('input', check);
+    inp.addEventListener('change', check);
   });
   document.querySelectorAll('form[data-form]').forEach(function (form) {
     var next = form.getAttribute('data-success') === 'newsletterreceived' ? 'youre-in.html' : 'thank-you.html';

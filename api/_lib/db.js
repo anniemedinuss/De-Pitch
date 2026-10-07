@@ -312,6 +312,21 @@ const SCHEMA = [
      ADD COLUMN IF NOT EXISTS reviewed_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS session_date TEXT DEFAULT ''`,
   `ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS review_token TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS review_note TEXT DEFAULT ''`,
   `UPDATE enquiries SET service = '' WHERE form = 'Book free consultation (email)' AND service <> ''`,
+  `ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS consult_time TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS followup_at TEXT DEFAULT ''`,
+  `UPDATE enquiries SET consult_time = COALESCE(fields::json->>'time_of_consultation', '') WHERE consult_time = '' AND service <> '' AND fields LIKE '%time_of_consultation%'`,
+  `ALTER TABLE chats ADD COLUMN IF NOT EXISTS slack_at TEXT DEFAULT ''`,
+  `CREATE TABLE IF NOT EXISTS contacts (
+    id SERIAL PRIMARY KEY, email TEXT UNIQUE NOT NULL, first_name TEXT DEFAULT '', last_name TEXT DEFAULT '',
+    tags TEXT DEFAULT '', status TEXT DEFAULT 'subscribed', source TEXT DEFAULT '', notes TEXT DEFAULT '',
+    unsubscribed_at TEXT DEFAULT '', created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`,
+  `CREATE TABLE IF NOT EXISTS campaigns (
+    id SERIAL PRIMARY KEY, name TEXT DEFAULT '', subject TEXT DEFAULT '', preheader TEXT DEFAULT '', template TEXT DEFAULT 'spotlight',
+    content TEXT DEFAULT '{}', audience TEXT DEFAULT '[]', status TEXT DEFAULT 'draft', sent_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0,
+    sent_at TEXT DEFAULT '', created_by INTEGER, created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`,
+  `CREATE TABLE IF NOT EXISTS campaign_sends (
+    campaign_id INTEGER NOT NULL, contact_id INTEGER NOT NULL, email TEXT DEFAULT '', first_name TEXT DEFAULT '',
+    status TEXT DEFAULT 'queued', error TEXT DEFAULT '', sent_at TEXT DEFAULT '', opened_at TEXT DEFAULT '',
+    PRIMARY KEY (campaign_id, contact_id))`,
   `CREATE INDEX IF NOT EXISTS payroll_user_idx ON payroll (user_id)`,
   `CREATE INDEX IF NOT EXISTS reports_user_idx ON reports (user_id)`,
   `CREATE INDEX IF NOT EXISTS requests_user_idx ON requests (user_id)`,

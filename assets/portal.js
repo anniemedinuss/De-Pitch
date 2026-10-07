@@ -1372,7 +1372,7 @@
       S.user = j.user;
       start();
     }).catch(function (x) {
-      app.innerHTML = '<div class="boot"><img src="assets/images/image07.png" alt="dé pitch" width="132"><p class="error" style="max-width:420px;text-align:center">' + esc(x.message) + '</p></div>';
+      app.innerHTML = '<div class="boot"><img src="assets/images/image07.png" alt="dé pitch" width="132"><p class="error" style="max-width:420px;text-align:center">' + esc(x.message) + '</p><p class="small muted" style="max-width:420px;text-align:center">The portal needs its server and database, so it works on the live Vercel site, not in a preview.</p><p class="small"><a href="index.html">← Back to the website</a></p></div>';
     });
   }
   document.addEventListener('click', function (e) {

@@ -6,11 +6,7 @@
 
   /* ================= SETTINGS — edit these ================= */
   var CONFIG = {
-    // Where every form is sent. FormSubmit emails each submission (CV
-    // attachments included) to this address. The first submission sends a
-    // one-time "Activate Form" email to office@depitchhq.com — click it once.
-    // Using Formspree / Web3Forms / Getform instead? Paste its URL here.
-    formEndpoint: 'https://formsubmit.co/office@depitchhq.com',
+    // Every website form is saved in the portal (People Ops → Website enquiries).
 
     // Google Analytics / Ads IDs from the old site. They load only after a
     // visitor accepts cookies. Set to [] to turn analytics off.
@@ -75,18 +71,8 @@
   }
   document.querySelectorAll('form[data-form]').forEach(function (form) {
     var next = form.getAttribute('data-success') === 'newsletterreceived' ? 'youre-in.html' : 'thank-you.html';
-    form.action = CONFIG.formEndpoint;
-    form.method = 'POST';
-    form.enctype = 'multipart/form-data';
-    hidden(form, '_subject', 'Dé Pitch website: ' + form.getAttribute('data-form'));
-    hidden(form, '_template', 'table');
-    hidden(form, '_captcha', 'false');
-    hidden(form, '_next', new URL(next, location.href).href);
-    hidden(form, 'form', form.getAttribute('data-form'));
-    hidden(form, 'page', document.title);
 
     form.addEventListener('submit', function (e) {
-      if (form.dataset.fallback === '1') return; // second try goes straight to FormSubmit
       e.preventDefault();
       var btn = form.querySelector('button[type="submit"]');
       var label = btn ? btn.textContent : '';
@@ -111,9 +97,8 @@
           throw new Error('server');
         });
       }).catch(function () {
-        // The portal is unreachable: send the form by email instead.
-        form.dataset.fallback = '1';
-        HTMLFormElement.prototype.submit.call(form);
+        alert('Sorry, your message could not be sent. Please check your connection and try again, or email office@depitchhq.com.');
+        if (btn) { btn.disabled = false; btn.textContent = label; }
       });
       if (window.gtag) {
         window.gtag('event', 'conversion_event_submit_lead_form', { form_name: form.getAttribute('data-form') });

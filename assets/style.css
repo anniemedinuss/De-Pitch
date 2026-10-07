@@ -293,7 +293,8 @@ p { margin: 0; }
 .cw-head { background: var(--navy); color: #fff; padding: 14px 16px; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .cw-head b { display: block; font-size: 1rem; }
 .cw-head span { display: block; font-size: .78rem; opacity: .85; }
-.cw-head .cw-hours { opacity: .65; font-size: .72rem; margin-top: 1px; }
+.cw-head .cw-hours { opacity: .65; font-size: .72rem; margin-top: 2px; }
+.cw-head br { display: none; }
 .cw-offline { font-size: .82rem; background: #fdf1dc; color: #7a4d00; border-radius: 8px; padding: 8px 10px; }
 .cw-x { background: none; border: 0; color: #fff; font-size: 1.5rem; line-height: 1; cursor: pointer; padding: 0 4px; }
 .cw-tabs { display: flex; border-bottom: 1px solid var(--line); }

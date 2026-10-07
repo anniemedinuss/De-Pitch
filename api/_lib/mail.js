@@ -33,13 +33,18 @@ export async function sendEmail({ to, subject, html, text, replyTo }) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 5000);
-    const r = await fetch('https://api.resend.com/emails', {
+    const post = (from) => fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: FROM(), to: [to], subject, html, text, reply_to: replyTo || undefined }),
+      body: JSON.stringify({ from, to: [to], subject, html, text, reply_to: replyTo || undefined }),
       signal: ctrl.signal
     });
+    let r = await post(FROM());
+    // Until depitchhq.com is verified in Resend, fall back to Resend's test sender.
+    // (That sender can only deliver to the email address the Resend account was created with.)
+    if (!r.ok && (r.status === 403 || r.status === 422)) r = await post('Dé Pitch <onboarding@resend.dev>');
     clearTimeout(t);
+    if (!r.ok) console.error('Resend error', r.status, await r.text().catch(() => ''));
     return r.ok;
   } catch (e) {
     return false;

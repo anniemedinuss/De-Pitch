@@ -249,3 +249,7 @@ dialog::backdrop { background: rgba(1, 15, 30, .5); }
 #menu-btn { position: relative; }
 #menu-btn.has-count::after { content: ""; position: absolute; top: 6px; right: 6px; width: 10px; height: 10px; border-radius: 50%; background: #e3402c; border: 2px solid #fff; }
 .seg + .table-wrap, .seg + .row { margin-top: 14px; }
+div.field { display: grid; gap: 6px; font-size: .85rem; font-weight: 500; color: var(--ink-2); justify-items: start; }
+div.field .hint { font-weight: 400; }
+#sv-sections { display: grid; gap: 14px; }
+#sv-sections .grid-2, #sv-sections .grid-3 { align-items: start; }

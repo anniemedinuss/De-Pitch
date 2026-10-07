@@ -445,7 +445,9 @@ async function admOverview() {
     (SELECT COUNT(*)::int FROM referrals WHERE status = 'submitted') AS referrals,
     (SELECT COUNT(*)::int FROM points_claims WHERE status = 'pending') + (SELECT COUNT(*)::int FROM redemptions WHERE status = 'pending') AS points,
     (SELECT COUNT(*)::int FROM enquiries WHERE service <> '' AND consult_date = '' AND consult_done_at = '' AND paid_at = '' AND closed_at = '' AND done_at = '') +
-    (SELECT COUNT(*)::int FROM enquiries WHERE service <> '' AND consult_date <> '' AND consult_done_at = '' AND closed_at = '' AND LEFT(consult_date, 10) <= $1) AS services`, [new Date(Date.now() + 86400000).toISOString().slice(0, 10)]);
+    (SELECT COUNT(*)::int FROM enquiries WHERE service <> '' AND consult_date <> '' AND consult_done_at = '' AND closed_at = '' AND LEFT(consult_date, 10) <= $1) +
+    (SELECT COUNT(*)::int FROM enquiries WHERE service = 'interview' AND session_date <> '' AND done_at = '' AND closed_at = '' AND session_date <= $1) +
+    (SELECT COUNT(*)::int FROM enquiries WHERE service = 'cv' AND review_status = 'approved' AND delivered_at = '' AND closed_at = '') AS services`, [new Date(Date.now() + 86400000).toISOString().slice(0, 10)]);
   return { counts: c };
 }
 
@@ -1128,10 +1130,14 @@ const SERVICE_OF_FORM = {
   'Recruitment request': 'recruitment', 'Human capital consultation': 'hcm'
 };
 const SERVICE_LABEL = { consultation: 'Free consultation', cv: 'CV revamp', interview: 'Interview prep', recruitment: 'Recruitment', hcm: 'Human capital' };
+const INTEREST_LABEL = { cv: 'CV revamp', interview: 'Interview prep', recruitment: 'Recruitment', hcm: 'Human capital', unsure: 'Not sure yet' };
+const REVIEW_STATUS = ['', 'pending', 'approved', 'changes'];
 function stageOf(e) {
   if (e.closed_at) return 'closed';
   if (e.delivered_at) return 'delivered';
+  if (e.service === 'cv' && e.done_at) return e.review_status === 'approved' ? 'approved' : e.review_status === 'changes' ? 'changes' : 'review';
   if (e.done_at) return 'done';
+  if (e.service === 'interview' && e.session_date) return 'session';
   if (e.paid_at) return 'paid';
   if (e.consult_done_at) return 'consulted';
   if (e.consult_date) return 'scheduled';
@@ -1154,9 +1160,9 @@ async function sendForReview(e) {
   const lines = [
     `*Client:* ${e.name || '—'} (${e.email || 'no email'}${e.phone ? ', ' + e.phone : ''})`,
     `*Service:* ${label}`,
-    e.paid_at ? `*Paid:* ${e.currency} ${Number(e.amount || 0).toLocaleString('en-NG')} on ${e.paid_at}` : '*Paid:* not recorded',
+    `*Paid:* ${e.paid_at ? 'Yes (' + e.paid_at + ')' : 'Not yet'}`,
     e.consult_done_at ? `*Consultation held:* ${e.consult_done_at}` : '',
-    `*Completed:* ${e.done_at}`,
+    `*CV finished:* ${e.done_at}`,
     e.track_notes ? `*Notes:* ${e.track_notes}` : ''
   ].filter(Boolean);
   const fileLine = e.result_file_id ? `\n<${base}/api/portal?file=${e.result_file_id}|Open the finished ${e.service === 'cv' ? 'CV' : 'file'}> (sign in to the portal first)` : '';
@@ -1164,6 +1170,7 @@ async function sendForReview(e) {
   const blocks = [
     { type: 'header', text: { type: 'plain_text', text: `${label} ready for review` } },
     { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') + fileLine } },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: 'Once reviewed, mark it *Approved* or *Changes requested* in the portal.' }] },
     { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open in the portal' }, url: `${base}/portal#/services` }] }
   ];
   return postSlack(text, blocks);
@@ -1173,7 +1180,7 @@ async function admServices() {
   const rows = await query(`SELECT e.*, f.filename, rf.filename AS result_filename FROM enquiries e
     LEFT JOIN files f ON f.id = e.file_id LEFT JOIN files rf ON rf.id = e.result_file_id
     WHERE e.service <> '' ORDER BY e.id DESC LIMIT 1000`);
-  return { rows: rows.map((r) => ({ ...r, fields: json(r.fields, {}), stage: stageOf(r) })), slackOn: !!process.env.SLACK_WEBHOOK_URL, labels: SERVICE_LABEL };
+  return { rows: rows.map((r) => ({ ...r, fields: json(r.fields, {}), stage: stageOf(r) })), slackOn: !!process.env.SLACK_WEBHOOK_URL, labels: SERVICE_LABEL, interests: INTEREST_LABEL };
 }
 
 async function admSaveService(admin, b) {
@@ -1182,13 +1189,22 @@ async function admSaveService(admin, b) {
   if (id && !e) fail(404, 'Not found.');
   const service = SERVICE_LABEL[b.service] ? b.service : (e ? e.service : fail(400, 'Choose a service.'));
   const d = (k, label) => date(b[k], label, true);
+  const today = new Date().toISOString().slice(0, 10);
   const vals = {
     consult_date: str(b.consult_date, 16).replace('T', ' '), consult_mode: str(b.consult_mode, 40),
-    consult_done_at: d('consult_done_at', 'Consultation date'), paid_at: d('paid_at', 'Payment date'),
-    amount: num(b.amount), currency: str(b.currency, 3).toUpperCase() || 'NGN',
-    done_at: d('done_at', 'Completed date'), delivered_at: d('delivered_at', 'Delivered date'), closed_at: d('closed_at', 'Closed date'),
+    consult_done_at: d('consult_done_at', 'Consultation date'),
+    paid_at: service === 'consultation' ? '' : b.paid ? ((e && e.paid_at) || today) : '',
+    session_date: service === 'interview' ? d('session_date', 'Session date') : '',
+    interest: service === 'consultation' && INTEREST_LABEL[b.interest] ? b.interest : '',
+    done_at: d('done_at', 'Completed date'), closed_at: d('closed_at', 'Closed date'),
+    review_status: REVIEW_STATUS.includes(b.review_status) ? b.review_status : ((e && e.review_status) || ''),
     track_notes: str(b.track_notes, 2000)
   };
+  if (service === 'consultation') vals.done_at = '';
+  if (service === 'cv' && !vals.done_at) vals.review_status = '';
+  // A CV can only be marked delivered once the review has approved it.
+  vals.delivered_at = service === 'cv' ? (vals.review_status === 'approved' ? d('delivered_at', 'Delivered date') : '') : '';
+  const reviewedAt = vals.review_status !== ((e && e.review_status) || '') && ['approved', 'changes'].includes(vals.review_status) ? nowIso() : ((e && e.reviewed_at) || '');
   let resultFile = e ? e.result_file_id : null;
   let newId = id;
   if (!e) {
@@ -1198,15 +1214,21 @@ async function admSaveService(admin, b) {
     newId = row.id;
   }
   if (b.file) resultFile = await saveFile(b.file, { title: `Finished ${SERVICE_LABEL[service]}: ${b.name || (e && e.name) || ''}`, category: service === 'cv' ? 'Finished CV' : 'Service file', uploaded_by: admin.id });
-  await query(`UPDATE enquiries SET service=$1, consult_date=$2, consult_mode=$3, consult_done_at=$4, paid_at=$5, amount=$6, currency=$7, done_at=$8, delivered_at=$9,
-      closed_at=$10, track_notes=$11, result_file_id=$12, status='handled', updated_at=$13 WHERE id=$14`,
-    [service, vals.consult_date, vals.consult_mode, vals.consult_done_at, vals.paid_at, vals.amount, vals.currency, vals.done_at, vals.delivered_at, vals.closed_at, vals.track_notes, resultFile, nowIso(), newId]);
-  const fresh = await one(`SELECT * FROM enquiries WHERE id = $1`, [newId]);
+  await query(`UPDATE enquiries SET service=$1, consult_date=$2, consult_mode=$3, consult_done_at=$4, paid_at=$5, session_date=$6, interest=$7, done_at=$8, delivered_at=$9,
+      closed_at=$10, track_notes=$11, result_file_id=$12, review_status=$13, reviewed_at=$14, status='handled', updated_at=$15 WHERE id=$16`,
+    [service, vals.consult_date, vals.consult_mode, vals.consult_done_at, vals.paid_at, vals.session_date, vals.interest, vals.done_at, vals.delivered_at,
+      vals.closed_at, vals.track_notes, resultFile, vals.review_status, reviewedAt, nowIso(), newId]);
+  let fresh = await one(`SELECT * FROM enquiries WHERE id = $1`, [newId]);
   let slack = null;
   const justDone = fresh.done_at && (!e || !e.done_at);
-  if ((justDone && !fresh.review_sent_at) || b.resend) {
+  if (service === 'cv' && ((justDone && !fresh.review_sent_at) || b.resend)) {
     slack = await sendForReview(fresh);
-    if (slack) await query(`UPDATE enquiries SET review_sent_at = $1 WHERE id = $2`, [nowIso(), newId]);
+    // Sending (or re-sending after changes) puts the CV back into "awaiting review".
+    await query(`UPDATE enquiries SET review_status = 'pending'${slack ? ', review_sent_at = $2' : ''} WHERE id = $1`, slack ? [newId, nowIso()] : [newId]);
+    fresh = await one(`SELECT * FROM enquiries WHERE id = $1`, [newId]);
+  } else if (service === 'cv' && justDone) {
+    await query(`UPDATE enquiries SET review_status = 'pending' WHERE id = $1`, [newId]);
+    fresh = await one(`SELECT * FROM enquiries WHERE id = $1`, [newId]);
   }
   return { id: newId, stage: stageOf(fresh), slack, slackOn: !!process.env.SLACK_WEBHOOK_URL };
 }

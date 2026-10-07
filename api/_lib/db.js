@@ -308,6 +308,8 @@ const SCHEMA = [
      consult_date = COALESCE(NULLIF(consult_date, ''), COALESCE(fields::json->>'date_of_consultation', '')),
      consult_mode = COALESCE(NULLIF(consult_mode, ''), COALESCE(fields::json->>'mode_of_consultation', ''))
    WHERE service = '' AND form IN ('Free career consultation','Book free consultation (email)','CV Revamp request','Interview prep booking','Recruitment request','Human capital consultation')`,
+  `ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS interest TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS review_status TEXT DEFAULT '',
+     ADD COLUMN IF NOT EXISTS reviewed_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS session_date TEXT DEFAULT ''`,
   `CREATE INDEX IF NOT EXISTS payroll_user_idx ON payroll (user_id)`,
   `CREATE INDEX IF NOT EXISTS reports_user_idx ON reports (user_id)`,
   `CREATE INDEX IF NOT EXISTS requests_user_idx ON requests (user_id)`,

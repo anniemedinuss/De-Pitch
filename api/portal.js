@@ -643,7 +643,7 @@ async function admInvoiceStatus(admin, b) {
   const status = ['draft', 'sent', 'paid'].includes(b.status) ? b.status : fail(400, 'Choose a status.');
   const col = status === 'sent' ? ', sent_at=$3' : status === 'paid' ? ', paid_at=$3' : '';
   const params = [status, int(b.id)];
-  if (col) params.push(today());
+  if (col) params.push(date(status === 'paid' ? b.paid_at : b.sent_at, 'Date', true) || today());
   await query(`UPDATE invoices SET status=$1${col}, updated_at='${nowIso()}' WHERE id=$2`, params);
   return { ok: true };
 }

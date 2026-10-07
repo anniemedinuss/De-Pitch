@@ -443,7 +443,9 @@ async function admOverview() {
     (SELECT COUNT(*)::int FROM enquiries WHERE status = 'new') AS enquiries,
     (SELECT COUNT(*)::int FROM chats WHERE status = 'open' AND last_visitor_msg > last_staff_msg) AS chats,
     (SELECT COUNT(*)::int FROM referrals WHERE status = 'submitted') AS referrals,
-    (SELECT COUNT(*)::int FROM points_claims WHERE status = 'pending') + (SELECT COUNT(*)::int FROM redemptions WHERE status = 'pending') AS points`);
+    (SELECT COUNT(*)::int FROM points_claims WHERE status = 'pending') + (SELECT COUNT(*)::int FROM redemptions WHERE status = 'pending') AS points,
+    (SELECT COUNT(*)::int FROM enquiries WHERE service <> '' AND consult_date = '' AND consult_done_at = '' AND paid_at = '' AND closed_at = '' AND done_at = '') +
+    (SELECT COUNT(*)::int FROM enquiries WHERE service <> '' AND consult_date <> '' AND consult_done_at = '' AND closed_at = '' AND LEFT(consult_date, 10) <= $1) AS services`, [new Date(Date.now() + 86400000).toISOString().slice(0, 10)]);
   return { counts: c };
 }
 
@@ -844,8 +846,11 @@ async function pubForm(rq, b) {
   if (!Object.keys(fields).length) fail(400, 'Please fill in the form.');
   let fileId = null;
   if (b.file && b.file.data) fileId = await saveFile(b.file, { title: `${form}: ${name || mail || 'website'}`, category: 'Website upload', uploaded_by: null });
-  const row = await one(`INSERT INTO enquiries (form, name, email, phone, fields, file_id, page, status, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'new',$8) RETURNING id`,
-    [form, name, mail, phone, JSON.stringify(fields), fileId, str(b.page, 200), nowIso()]);
+  const service = SERVICE_OF_FORM[form] || '';
+  const cDate = fields.date_of_consultation || '';
+  const cMode = fields.mode_of_consultation || '';
+  const row = await one(`INSERT INTO enquiries (form, name, email, phone, fields, file_id, page, status, service, consult_date, consult_mode, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'new',$8,$9,$10,$11) RETURNING id`,
+    [form, name, mail, phone, JSON.stringify(fields), fileId, str(b.page, 200), service, cDate, cMode, nowIso()]);
   await notify(`Website form: ${form}`, { ...fields, 'CV / file': fileId ? 'Uploaded. Open it in the portal under Website enquiries.' : '' }, FORMS_EMAIL);
   return { ok: true, id: row.id };
 }
@@ -1116,6 +1121,96 @@ const PUBLIC = {
   'public.chatStart': pubChatStart, 'public.chatSend': pubChatSend, 'public.chatPoll': pubChatPoll
 };
 
+/* ================= services tracker (consultations, CV revamp, interview prep, recruitment) ================= */
+const SERVICE_OF_FORM = {
+  'Free career consultation': 'consultation', 'Book free consultation (email)': 'consultation',
+  'CV Revamp request': 'cv', 'Interview prep booking': 'interview',
+  'Recruitment request': 'recruitment', 'Human capital consultation': 'hcm'
+};
+const SERVICE_LABEL = { consultation: 'Free consultation', cv: 'CV revamp', interview: 'Interview prep', recruitment: 'Recruitment', hcm: 'Human capital' };
+function stageOf(e) {
+  if (e.closed_at) return 'closed';
+  if (e.delivered_at) return 'delivered';
+  if (e.done_at) return 'done';
+  if (e.paid_at) return 'paid';
+  if (e.consult_done_at) return 'consulted';
+  if (e.consult_date) return 'scheduled';
+  return 'new';
+}
+async function postSlack(text, blocks) {
+  const url = process.env.SLACK_WEBHOOK_URL;
+  if (!url) return false;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, blocks }), signal: ctrl.signal });
+    clearTimeout(t);
+    return r.ok;
+  } catch (e) { return false; }
+}
+async function sendForReview(e) {
+  const base = assetBase();
+  const label = SERVICE_LABEL[e.service] || 'Service';
+  const lines = [
+    `*Client:* ${e.name || '—'} (${e.email || 'no email'}${e.phone ? ', ' + e.phone : ''})`,
+    `*Service:* ${label}`,
+    e.paid_at ? `*Paid:* ${e.currency} ${Number(e.amount || 0).toLocaleString('en-NG')} on ${e.paid_at}` : '*Paid:* not recorded',
+    e.consult_done_at ? `*Consultation held:* ${e.consult_done_at}` : '',
+    `*Completed:* ${e.done_at}`,
+    e.track_notes ? `*Notes:* ${e.track_notes}` : ''
+  ].filter(Boolean);
+  const fileLine = e.result_file_id ? `\n<${base}/api/portal?file=${e.result_file_id}|Open the finished ${e.service === 'cv' ? 'CV' : 'file'}> (sign in to the portal first)` : '';
+  const text = `${label} ready for review: ${e.name || e.email}`;
+  const blocks = [
+    { type: 'header', text: { type: 'plain_text', text: `${label} ready for review` } },
+    { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') + fileLine } },
+    { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open in the portal' }, url: `${base}/portal#/services` }] }
+  ];
+  return postSlack(text, blocks);
+}
+
+async function admServices() {
+  const rows = await query(`SELECT e.*, f.filename, rf.filename AS result_filename FROM enquiries e
+    LEFT JOIN files f ON f.id = e.file_id LEFT JOIN files rf ON rf.id = e.result_file_id
+    WHERE e.service <> '' ORDER BY e.id DESC LIMIT 1000`);
+  return { rows: rows.map((r) => ({ ...r, fields: json(r.fields, {}), stage: stageOf(r) })), slackOn: !!process.env.SLACK_WEBHOOK_URL, labels: SERVICE_LABEL };
+}
+
+async function admSaveService(admin, b) {
+  const id = int(b.id);
+  const e = id ? await one(`SELECT * FROM enquiries WHERE id = $1`, [id]) : null;
+  if (id && !e) fail(404, 'Not found.');
+  const service = SERVICE_LABEL[b.service] ? b.service : (e ? e.service : fail(400, 'Choose a service.'));
+  const d = (k, label) => date(b[k], label, true);
+  const vals = {
+    consult_date: str(b.consult_date, 16).replace('T', ' '), consult_mode: str(b.consult_mode, 40),
+    consult_done_at: d('consult_done_at', 'Consultation date'), paid_at: d('paid_at', 'Payment date'),
+    amount: num(b.amount), currency: str(b.currency, 3).toUpperCase() || 'NGN',
+    done_at: d('done_at', 'Completed date'), delivered_at: d('delivered_at', 'Delivered date'), closed_at: d('closed_at', 'Closed date'),
+    track_notes: str(b.track_notes, 2000)
+  };
+  let resultFile = e ? e.result_file_id : null;
+  let newId = id;
+  if (!e) {
+    const name = req(b.name, 'Name', 120);
+    const row = await one(`INSERT INTO enquiries (form, name, email, phone, fields, status, service, created_at) VALUES ('Added by People Ops',$1,$2,$3,'{}','handled',$4,$5) RETURNING id`,
+      [name, str(b.email, 160).toLowerCase(), str(b.phone, 40), service, nowIso()]);
+    newId = row.id;
+  }
+  if (b.file) resultFile = await saveFile(b.file, { title: `Finished ${SERVICE_LABEL[service]}: ${b.name || (e && e.name) || ''}`, category: service === 'cv' ? 'Finished CV' : 'Service file', uploaded_by: admin.id });
+  await query(`UPDATE enquiries SET service=$1, consult_date=$2, consult_mode=$3, consult_done_at=$4, paid_at=$5, amount=$6, currency=$7, done_at=$8, delivered_at=$9,
+      closed_at=$10, track_notes=$11, result_file_id=$12, status='handled', updated_at=$13 WHERE id=$14`,
+    [service, vals.consult_date, vals.consult_mode, vals.consult_done_at, vals.paid_at, vals.amount, vals.currency, vals.done_at, vals.delivered_at, vals.closed_at, vals.track_notes, resultFile, nowIso(), newId]);
+  const fresh = await one(`SELECT * FROM enquiries WHERE id = $1`, [newId]);
+  let slack = null;
+  const justDone = fresh.done_at && (!e || !e.done_at);
+  if ((justDone && !fresh.review_sent_at) || b.resend) {
+    slack = await sendForReview(fresh);
+    if (slack) await query(`UPDATE enquiries SET review_sent_at = $1 WHERE id = $2`, [nowIso(), newId]);
+  }
+  return { id: newId, stage: stageOf(fresh), slack, slackOn: !!process.env.SLACK_WEBHOOK_URL };
+}
+
 /* ---------- notification counts for employees and clients ---------- */
 async function meCounts(u) {
   const seen = json(u.seen || '{}', {});
@@ -1178,6 +1273,6 @@ const ACTIONS = {
   'emp.referrals': empReferrals, 'emp.submitReferral': empSubmitReferral,
   'adm.enquiries': admEnquiries, 'adm.enquiryStatus': admEnquiryStatus, 'adm.referrals': admReferrals, 'adm.updateReferral': admUpdateReferral,
   'adm.points': admPoints, 'adm.reviewClaim': admReviewClaim, 'adm.awardPoints': admAwardPoints, 'adm.updateRedemption': admUpdateRedemption,
-  'adm.chats': admChats, 'adm.chat': admChat, 'adm.chatReply': admChatReply, 'adm.chatStatus': admChatStatus, 'adm.settings': admSettings, 'adm.testPointsEmail': admTestPointsEmail,
+  'adm.chats': admChats, 'adm.chat': admChat, 'adm.chatReply': admChatReply, 'adm.chatStatus': admChatStatus, 'adm.services': admServices, 'adm.saveService': admSaveService, 'adm.settings': admSettings, 'adm.testPointsEmail': admTestPointsEmail,
   'adm.announcements': admAnnouncements, 'adm.saveAnnouncement': admSaveAnnouncement, 'adm.deleteAnnouncement': admDeleteAnnouncement
 };

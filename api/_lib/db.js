@@ -295,6 +295,19 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS ledger_member_idx ON points_ledger (member_id)`,
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS seen TEXT DEFAULT '{}'`,
   `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
+  `ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS service TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS consult_date TEXT DEFAULT '',
+     ADD COLUMN IF NOT EXISTS consult_mode TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS consult_done_at TEXT DEFAULT '',
+     ADD COLUMN IF NOT EXISTS paid_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS amount DOUBLE PRECISION DEFAULT 0,
+     ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'NGN', ADD COLUMN IF NOT EXISTS done_at TEXT DEFAULT '',
+     ADD COLUMN IF NOT EXISTS delivered_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS closed_at TEXT DEFAULT '',
+     ADD COLUMN IF NOT EXISTS review_sent_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS result_file_id INTEGER,
+     ADD COLUMN IF NOT EXISTS track_notes TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
+  `UPDATE enquiries SET service = CASE form WHEN 'Free career consultation' THEN 'consultation' WHEN 'Book free consultation (email)' THEN 'consultation'
+     WHEN 'CV Revamp request' THEN 'cv' WHEN 'Interview prep booking' THEN 'interview' WHEN 'Recruitment request' THEN 'recruitment'
+     WHEN 'Human capital consultation' THEN 'hcm' ELSE '' END,
+     consult_date = COALESCE(NULLIF(consult_date, ''), COALESCE(fields::json->>'date_of_consultation', '')),
+     consult_mode = COALESCE(NULLIF(consult_mode, ''), COALESCE(fields::json->>'mode_of_consultation', ''))
+   WHERE service = '' AND form IN ('Free career consultation','Book free consultation (email)','CV Revamp request','Interview prep booking','Recruitment request','Human capital consultation')`,
   `CREATE INDEX IF NOT EXISTS payroll_user_idx ON payroll (user_id)`,
   `CREATE INDEX IF NOT EXISTS reports_user_idx ON reports (user_id)`,
   `CREATE INDEX IF NOT EXISTS requests_user_idx ON requests (user_id)`,

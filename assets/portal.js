@@ -309,7 +309,7 @@
   var NAV = {
     employee: [['overview', 'Overview', 'overview'], ['pay', 'Pay & payslips', 'pay'], ['reports', 'Weekly reports', 'reports'], ['requests', 'Requests', 'requests'], ['referrals', 'Referrals', 'referrals'], ['documents', 'Documents', 'documents']],
     client: [['overview', 'Overview', 'overview'], ['talents', 'Your talents', 'talents'], ['invoices', 'Invoices', 'invoices'], ['recruitment', 'Request talent', 'recruitment'], ['documents', 'Documents', 'documents']],
-    admin: [['inbox', 'Inbox', 'inbox'], ['chat', 'Live chat', 'chats'], ['enquiries', 'Website enquiries', 'enquiries'], ['people', 'People'], ['clients', 'Clients'], ['payroll', 'Payroll', 'payroll_pending'], ['invoices', 'Invoices', 'invoices_draft'],
+    admin: [['inbox', 'Inbox', 'inbox'], ['chat', 'Live chat', 'chats'], ['services', 'Services', 'services'], ['enquiries', 'Website enquiries', 'enquiries'], ['people', 'People'], ['clients', 'Clients'], ['payroll', 'Payroll', 'payroll_pending'], ['invoices', 'Invoices', 'invoices_draft'],
       ['reports', 'Weekly reports', 'reports'], ['requests', 'Requests', 'requests'], ['recruitment', 'Talent requests', 'recruitment'],
       ['feedback', 'Reviews & removals', 'feedback'], ['referrals', 'Referrals', 'referrals'], ['points', 'Points & rewards', 'points'], ['documents', 'Documents'], ['announcements', 'Announcements']]
   };
@@ -323,7 +323,7 @@
 
   function countFor(key) {
     var c = S.counts || {};
-    if (key === 'inbox') return (c.reports || 0) + (c.requests || 0) + (c.recruitment || 0) + (c.feedback || 0) + (c.referrals || 0) + (c.points || 0);
+    if (key === 'inbox') return (c.reports || 0) + (c.requests || 0) + (c.recruitment || 0) + (c.feedback || 0) + (c.referrals || 0) + (c.points || 0) + (c.services || 0);
     return c[key] || 0;
   }
 
@@ -1616,6 +1616,127 @@
       tick();
     });
   };
+
+  /* ================= admin: services tracker ================= */
+  var STAGE_LABEL = { 'new': 'New', scheduled: 'Consultation booked', consulted: 'Consultation held', paid: 'Paid', done: 'Done, sent for review', delivered: 'Delivered', closed: 'Closed' };
+  var STAGE_PILL = { 'new': 'warn', scheduled: 'info', consulted: 'info', paid: 'ok', done: 'ok', delivered: 'mute', closed: 'mute' };
+  function stagePill(s) { return '<span class="pill ' + (STAGE_PILL[s] || 'mute') + '">' + esc(STAGE_LABEL[s] || s) + '</span>'; }
+  function svcMonth(d) { return d ? String(d).slice(0, 7) : ''; }
+
+  function serviceModal(r, labels, slackOn) {
+    r = r || { service: 'cv', fields: {}, currency: 'NGN' };
+    var isNew = !r.id;
+    var doneLabel = r.service === 'cv' ? 'CV finished on' : r.service === 'interview' ? 'Session done on' : 'Completed on';
+    var f = r.fields || {};
+    var details = Object.keys(f).filter(function (k) { return f[k]; }).map(function (k) { return '<dt>' + esc(cap(k.replace(/[-_]/g, ' '))) + '</dt><dd>' + esc(f[k]) + '</dd>'; }).join('');
+    var m = openModal({
+      title: isNew ? 'Add a service record' : (labels[r.service] || 'Service') + ' · ' + (r.name || r.email), wide: true,
+      body: (isNew ? '<div class="grid-3"><label class="field">Service<select id="sv-service">' + Object.keys(labels).map(function (k) { return '<option value="' + k + '">' + esc(labels[k]) + '</option>'; }).join('') + '</select></label>' +
+          '<label class="field">Name<input id="sv-name"></label><label class="field">Email<input type="email" id="sv-email"></label></div><label class="field">Phone<input id="sv-phone"></label>'
+        : '<dl class="kv"><dt>Received</dt><dd>' + esc(fmtDate(r.created_at)) + ' from "' + esc(r.form) + '"</dd>' + details +
+          (r.file_id ? '<dt>Their upload</dt><dd>' + fileLink(r.file_id, r.filename || 'Open file') + '</dd>' : '') +
+          (r.result_file_id ? '<dt>Finished file</dt><dd>' + fileLink(r.result_file_id, r.result_filename || 'Open') + '</dd>' : '') +
+          '<dt>Stage</dt><dd>' + stagePill(r.stage) + '</dd></dl>') +
+        '<div class="section-label">Consultation</div><div class="grid-3">' +
+        '<label class="field">Consultation date<input type="date" id="sv-cdate" value="' + esc(String(r.consult_date || '').slice(0, 10)) + '"></label>' +
+        '<label class="field">Mode<select id="sv-cmode">' + ['', 'Virtual Meeting', 'Phone Call', 'In person'].map(function (o) { return '<option' + (r.consult_mode === o ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' +
+        '<label class="field">Consultation held on<input type="date" id="sv-cdone" value="' + esc(r.consult_done_at || '') + '"></label></div>' +
+        '<div class="section-label">Payment</div><div class="grid-3">' +
+        '<label class="field">Amount paid<input type="number" step="0.01" id="sv-amount" value="' + esc(r.amount || '') + '"></label>' +
+        '<label class="field">Currency<select id="sv-cur">' + ['NGN', 'USD', 'GBP', 'EUR', 'CAD'].map(function (c) { return '<option' + ((r.currency || 'NGN') === c ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></label>' +
+        '<label class="field">Paid on<input type="date" id="sv-paid" value="' + esc(r.paid_at || '') + '"></label></div>' +
+        '<div class="section-label">Delivery</div><div class="grid-3">' +
+        '<label class="field">' + esc(doneLabel) + '<input type="date" id="sv-done" value="' + esc(r.done_at || '') + '"></label>' +
+        '<label class="field">Delivered to client on<input type="date" id="sv-delivered" value="' + esc(r.delivered_at || '') + '"></label>' +
+        '<label class="field">Closed / not going ahead on<input type="date" id="sv-closed" value="' + esc(r.closed_at || '') + '"></label></div>' +
+        '<label class="field">Finished file (e.g. the revamped CV)<input type="file" id="sv-file" accept=".pdf,.doc,.docx"><span class="hint">Up to 3 MB. Linked in the Slack message for review.</span></label>' +
+        '<label class="field">Notes<textarea id="sv-notes">' + esc(r.track_notes || '') + '</textarea></label>' +
+        '<p class="small muted">' + (slackOn ? (r.review_sent_at ? 'Sent to Slack for review on ' + esc(fmtDate(r.review_sent_at)) + '.' : 'When you mark it done, the details are posted to your Slack channel for review.') : 'Slack is not connected yet. Add SLACK_WEBHOOK_URL in Vercel to post finished work for review.') + '</p>' +
+        '<p class="error" id="sv-err"></p>',
+      foot: (r.done_at && slackOn ? '<button class="btn secondary" id="sv-resend" type="button" style="margin-right:auto">' + (r.review_sent_at ? 'Resend to Slack' : 'Send to Slack') + '</button>' : '') +
+        '<button class="btn secondary" data-close type="button">Cancel</button>' +
+        (!r.done_at ? '<button class="btn ok" id="sv-markdone" type="button">' + (r.service === 'cv' ? 'CV done, send for review' : 'Mark done, send for review') + '</button>' : '') +
+        '<button class="btn" id="sv-save" type="button">Save</button>'
+    });
+    function collect(extra) {
+      var d = { id: r.id, consult_date: $('#sv-cdate', m).value, consult_mode: $('#sv-cmode', m).value, consult_done_at: $('#sv-cdone', m).value,
+        amount: $('#sv-amount', m).value, currency: $('#sv-cur', m).value, paid_at: $('#sv-paid', m).value, done_at: $('#sv-done', m).value,
+        delivered_at: $('#sv-delivered', m).value, closed_at: $('#sv-closed', m).value, track_notes: $('#sv-notes', m).value };
+      if (isNew) { d.service = $('#sv-service', m).value; d.name = $('#sv-name', m).value; d.email = $('#sv-email', m).value; d.phone = $('#sv-phone', m).value; }
+      return Object.assign(d, extra || {});
+    }
+    function save(btn, extra, msg) {
+      busy(btn, true);
+      fileToPayload($('#sv-file', m)).then(function (file) { var d = collect(extra); if (file) d.file = file; return api('adm.saveService', d); })
+        .then(function (j) {
+          closeModal();
+          toast(j.slack ? (msg || 'Saved and posted to Slack for review.') : (j.slack === false && j.slackOn ? 'Saved, but Slack did not accept the message.' : 'Saved.'));
+          refreshCounts(); renderShell();
+        }).catch(errIn(m, '#sv-err'));
+    }
+    $('#sv-save', m).onclick = function () { save(this); };
+    if ($('#sv-markdone', m)) $('#sv-markdone', m).onclick = function () { if (!$('#sv-done', m).value) $('#sv-done', m).value = isoToday(); save(this); };
+    if ($('#sv-resend', m)) $('#sv-resend', m).onclick = function () { save(this, { resend: true }, 'Posted to Slack again.'); };
+  }
+
+  ADM.services = function (el) {
+    var view = sessionStorage.getItem('dp_svc_view') || 'upcoming';
+    return api('adm.services').then(function (j) {
+      var rows = j.rows, labels = j.labels, today = isoToday();
+      var views = [['upcoming', 'Upcoming consultations'], ['consultation', 'Free consultations'], ['cv', 'CV revamp'], ['interview', 'Interview prep'], ['recruitment', 'Recruitment & HR'], ['all', 'All'], ['report', 'Monthly report']];
+      var html = head('Services', 'Consultations, CV revamps, interview prep and recruitment requests from the website, from first contact to delivery.', '<button class="btn" id="sv-add" type="button">+ Add record</button>') +
+        '<div class="seg">' + views.map(function (v) { return '<button type="button" data-v="' + v[0] + '" class="' + (view === v[0] ? 'on' : '') + '">' + v[1] + '</button>'; }).join('') + '</div>';
+      if (view === 'report') {
+        var svcFilter = sessionStorage.getItem('dp_svc_rep') || '';
+        var list = rows.filter(function (r) { return !svcFilter || r.service === svcFilter || (svcFilter === 'recruitment' && r.service === 'hcm'); });
+        var months = {};
+        function bump(mo, k, v) { if (!mo) return; months[mo] = months[mo] || { received: 0, consult: 0, paid: 0, revenue: {}, done: 0, delivered: 0, closed: 0 }; if (k === 'revenue') months[mo].revenue[v.c] = (months[mo].revenue[v.c] || 0) + v.a; else months[mo][k]++; }
+        list.forEach(function (r) {
+          bump(svcMonth(r.created_at), 'received'); bump(svcMonth(r.consult_done_at), 'consult');
+          if (r.paid_at) { bump(svcMonth(r.paid_at), 'paid'); bump(svcMonth(r.paid_at), 'revenue', { c: r.currency || 'NGN', a: Number(r.amount) || 0 }); }
+          bump(svcMonth(r.done_at), 'done'); bump(svcMonth(r.delivered_at), 'delivered'); bump(svcMonth(r.closed_at), 'closed');
+        });
+        var keys = Object.keys(months).sort().reverse();
+        html += '<div class="row"><label class="small">Service <select class="input" id="sv-rep" style="width:auto"><option value="">All services</option>' + Object.keys(labels).filter(function (k) { return k !== 'hcm'; }).map(function (k) {
+          return '<option value="' + k + '"' + (svcFilter === k ? ' selected' : '') + '>' + esc(labels[k]) + '</option>'; }).join('') + '</select></label><button class="btn sm secondary" id="sv-csv" type="button">Download CSV</button></div>' +
+          table(['Month', '>Requests received', '>Consultations held', '>Paid', 'Revenue', '>Completed', '>Delivered', '>Closed'], keys.map(function (k) {
+            var x = months[k];
+            return '<tr><td><b>' + esc(monthLabel(k)) + '</b></td><td class="r">' + x.received + '</td><td class="r">' + x.consult + '</td><td class="r">' + x.paid + '</td><td>' +
+              (Object.keys(x.revenue).map(function (c) { return money(x.revenue[c], c); }).join(' + ') || '—') + '</td><td class="r">' + x.done + '</td><td class="r">' + x.delivered + '</td><td class="r">' + x.closed + '</td></tr>';
+          }), 'No activity yet.');
+        el.innerHTML = html;
+        $('#sv-rep', el).onchange = function () { sessionStorage.setItem('dp_svc_rep', this.value); renderShell(); };
+        $('#sv-csv', el).onclick = function () {
+          var out = [['Month', 'Requests received', 'Consultations held', 'Paid', 'Revenue', 'Completed', 'Delivered', 'Closed'].map(csvCell).join(',')].concat(keys.map(function (k) {
+            var x = months[k]; return [monthLabel(k), x.received, x.consult, x.paid, Object.keys(x.revenue).map(function (c) { return c + ' ' + x.revenue[c]; }).join(' + '), x.done, x.delivered, x.closed].map(csvCell).join(',');
+          }));
+          downloadText('Services monthly report.csv', '﻿' + out.join('\r\n'));
+        };
+      } else {
+        var shown;
+        if (view === 'upcoming') {
+          shown = rows.filter(function (r) { return r.consult_date && !r.consult_done_at && !r.closed_at; }).sort(function (a, b) { return a.consult_date < b.consult_date ? -1 : 1; });
+        } else if (view === 'all') shown = rows;
+        else shown = rows.filter(function (r) { return r.service === view || (view === 'recruitment' && r.service === 'hcm'); });
+        html += table(view === 'upcoming' ? ['Consultation', 'Client', 'Service', 'Mode', 'Stage', '>'] : ['Received', 'Client', 'Service', 'Consultation', 'Paid', 'Stage', '>'], shown.map(function (r) {
+          var idx = rows.indexOf(r);
+          var who = '<b>' + esc(r.name || '—') + '</b><div class="small muted">' + esc(r.email) + (r.phone ? ' · ' + esc(r.phone) : '') + '</div>';
+          var open = '<td><div class="actions"><button class="btn sm" data-sv="' + idx + '" type="button">Open</button></div></td>';
+          if (view === 'upcoming') {
+            var d = String(r.consult_date).slice(0, 10), late = d < today;
+            return '<tr><td><b>' + esc(fmtDate(d)) + '</b>' + (d === today ? ' <span class="pill info">Today</span>' : late ? ' <span class="pill bad">Overdue</span>' : '') + '</td><td>' + who + '</td><td>' + esc(labels[r.service]) + '</td><td>' + esc(r.consult_mode || '—') + '</td><td>' + stagePill(r.stage) + '</td>' + open + '</tr>';
+          }
+          return '<tr><td>' + esc(fmtDate(r.created_at)) + '</td><td>' + who + '</td><td>' + esc(labels[r.service]) + '</td><td>' + (r.consult_done_at ? 'Held ' + esc(fmtDate(r.consult_done_at)) : r.consult_date ? 'Booked ' + esc(fmtDate(String(r.consult_date).slice(0, 10))) : '—') +
+            '</td><td>' + (r.paid_at ? money(r.amount, r.currency) + '<div class="small muted">' + esc(fmtDate(r.paid_at)) + '</div>' : '—') + '</td><td>' + stagePill(r.stage) + '</td>' + open + '</tr>';
+        }), view === 'upcoming' ? 'No upcoming consultations.' : 'Nothing here yet.');
+        el.innerHTML = html;
+        $$('[data-sv]', el).forEach(function (b) { b.onclick = function () { serviceModal(rows[Number(b.getAttribute('data-sv'))], labels, j.slackOn); }; });
+      }
+      $$('[data-v]', el).forEach(function (b) { b.onclick = function () { sessionStorage.setItem('dp_svc_view', b.getAttribute('data-v')); renderShell(); }; });
+      $('#sv-add', el).onclick = function () { serviceModal(null, labels, j.slackOn); };
+    });
+  };
+
 
   var VIEWS = { employee: EMP, client: CLI, admin: ADM };
 

@@ -248,3 +248,4 @@ dialog::backdrop { background: rgba(1, 15, 30, .5); }
 
 #menu-btn { position: relative; }
 #menu-btn.has-count::after { content: ""; position: absolute; top: 6px; right: 6px; width: 10px; height: 10px; border-radius: 50%; background: #e3402c; border: 2px solid #fff; }
+.seg + .table-wrap, .seg + .row { margin-top: 14px; }

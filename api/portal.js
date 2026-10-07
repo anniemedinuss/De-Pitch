@@ -345,7 +345,7 @@ async function cliDashboard(u) {
   const talents = await cliTalents(u);
   const invoices = await query(`SELECT id, number, period, total, currency, status, due_date FROM invoices WHERE client_id = $1 AND status IN ('sent','paid') ORDER BY period DESC, id DESC`, [u.client_id]);
   const open = await one(`SELECT COUNT(*)::int AS n FROM recruitment WHERE client_id = $1 AND status NOT IN ('filled','closed')`, [u.client_id]);
-  return { client, talents, invoices: invoices.slice(0, 12), payroll: payrollMatrix(invoices.length ? await invoiceItems(u.client_id) : [], talents), openRecruitment: open.n };
+  return { client, talents, invoices: invoices.slice(0, 12), payroll: payrollMatrix(invoices.length ? await invoiceItems(u.client_id) : [], talents, talents.length ? await query(`SELECT DISTINCT user_id, period FROM payroll WHERE user_id = ANY(string_to_array($1, ',')::int[])`, [talents.map((t) => t.id).join(',')]) : []), openRecruitment: open.n };
 }
 
 async function invoiceItems(clientId) {
@@ -355,19 +355,28 @@ async function invoiceItems(clientId) {
   return out;
 }
 
-function payrollMatrix(items, talents) {
-  const periods = [...new Set(items.map((i) => i.period))].sort().slice(-12);
+function payrollMatrix(items, talents, worked) {
+  // Invoiced amounts first; for months a talent worked but no invoice has been
+  // sent yet, show their agreed monthly rate (marked as an estimate).
   const names = {};
   for (const t of talents) names[t.id] = t.name;
   const byTalent = {};
+  const periodSet = new Set();
   for (const it of items) {
-    if (!periods.includes(it.period)) continue;
-    const key = it.talent_id ? 't' + it.talent_id : 'x' + it.description;
-    const cur = it.currency || 'NGN';
-    const k2 = key + ':' + cur;
-    if (!byTalent[k2]) byTalent[k2] = { name: it.talent_name || names[it.talent_id] || it.description || 'Other', currency: cur, amounts: {} };
-    byTalent[k2].amounts[it.period] = (byTalent[k2].amounts[it.period] || 0) + num(it.amount);
+    const key = (it.talent_id ? 't' + it.talent_id : 'x' + it.description) + ':' + (it.currency || 'NGN');
+    if (!byTalent[key]) byTalent[key] = { name: it.talent_name || names[it.talent_id] || it.description || 'Other', currency: it.currency || 'NGN', amounts: {}, estimated: {} };
+    byTalent[key].amounts[it.period] = (byTalent[key].amounts[it.period] || 0) + num(it.amount);
+    periodSet.add(it.period);
   }
+  for (const w of worked) {
+    const t = talents.find((x) => Number(x.id) === Number(w.user_id));
+    if (!t || !num(t.bill_rate)) continue;
+    const key = 't' + t.id + ':' + (t.pay_currency || 'NGN');
+    if (!byTalent[key]) byTalent[key] = { name: t.name, currency: t.pay_currency || 'NGN', amounts: {}, estimated: {} };
+    if (byTalent[key].amounts[w.period] == null) { byTalent[key].amounts[w.period] = num(t.bill_rate); byTalent[key].estimated[w.period] = true; }
+    periodSet.add(w.period);
+  }
+  const periods = [...periodSet].sort().slice(-12);
   return { periods, rows: Object.values(byTalent), currency: items[0] ? items[0].currency : 'NGN' };
 }
 

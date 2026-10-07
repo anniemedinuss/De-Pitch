@@ -695,16 +695,16 @@
         '<div class="stat"><span class="label">Monthly payroll</span><span class="value" style="font-size:1.25rem">' + monthly + '</span><span class="sub">Current monthly rate for all talents</span></div>' +
         '<div class="stat"><span class="label">Outstanding invoices</span><span class="value" style="font-size:1.25rem">' + owed + '</span><span class="sub">' + outstanding.length + ' awaiting payment</span></div>' +
         '<div class="stat"><span class="label">Open talent requests</span><span class="value">' + j.openRecruitment + '</span><span class="sub"><a href="#/recruitment">Request a new talent</a></span></div></div>' +
-        '<div class="panel"><div class="panel-head"><h2>Payroll by month, per talent</h2><span class="small muted">From your invoices</span></div>' +
+        '<div class="panel"><div class="panel-head"><h2>Payroll by month, per talent</h2><span class="small muted">' + (pm.rows.some(function (r) { return r.estimated && Object.keys(r.estimated).length; }) ? '* Agreed monthly rate, not yet invoiced' : 'From your invoices') + '</span></div>' +
         (pm.periods.length ? table(['Talent'].concat(pm.periods.map(function (p) { return '>' + monthShort(p) + ' ' + p.slice(2, 4); })).concat(['>Total']), pm.rows.map(function (r) {
           var tot = 0;
-          return '<tr><td><b>' + esc(r.name) + '</b></td>' + pm.periods.map(function (p) { var v = r.amounts[p] || 0; tot += v; return '<td class="r">' + (v ? money(v, r.currency) : '—') + '</td>'; }).join('') +
+          return '<tr><td><b>' + esc(r.name) + '</b></td>' + pm.periods.map(function (p) { var v = r.amounts[p] || 0; tot += v; var est = r.estimated && r.estimated[p]; return '<td class="r"' + (est ? ' style="color:var(--muted)" title="Agreed monthly rate. No invoice sent for this month yet."' : '') + '>' + (v ? money(v, r.currency) + (est ? '*' : '') : '—') + '</td>'; }).join('') +
             '<td class="r"><b>' + money(tot, r.currency) + '</b></td></tr>';
         }).concat(Object.keys(pm.rows.reduce(function (o, r) { o[r.currency] = 1; return o; }, {})).map(function (c) {
           return '<tr><td><b>Total (' + esc(c) + ')</b></td>' + pm.periods.map(function (p) {
             var s = pm.rows.filter(function (r) { return r.currency === c; }).reduce(function (a, r) { return a + (r.amounts[p] || 0); }, 0); return '<td class="r"><b>' + (s ? money(s, c) : '—') + '</b></td>';
           }).join('') + '<td></td></tr>';
-        }))) : '<p class="empty">Monthly payroll appears here once your first invoice is issued.</p>') + '</div>' +
+        }))) : '<p class="empty">Monthly payroll appears here once your talents start work.</p>') + '</div>' +
         '<div class="panel"><div class="panel-head"><h2>Recent invoices</h2><a class="btn sm secondary" href="#/invoices">All invoices</a></div>' + invoiceTable(j.invoices.slice(0, 5)) + '</div>';
       bindInvoiceButtons(el, 'cli.invoice');
     });

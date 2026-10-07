@@ -113,6 +113,8 @@ export default async function handler(req, res) {
   try {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
+    const reqUrl = new URL(req.url, 'http://x');
+    if (reqUrl.searchParams.get('review')) return await handleReview(req, res, reqUrl);
 
     if (req.method === 'GET') {
       const url = new URL(req.url, 'http://x');
@@ -851,6 +853,10 @@ async function pubForm(rq, b) {
   const service = SERVICE_OF_FORM[form] || '';
   const cDate = fields.date_of_consultation || '';
   const cMode = fields.mode_of_consultation || '';
+  if (service && /^\d{4}-\d{2}-\d{2}$/.test(cDate)) {
+    const day = new Date(cDate + 'T12:00:00Z').getUTCDay();
+    if (day === 0 || day === 6) fail(400, 'We book consultations Monday to Friday. Please choose a weekday.');
+  }
   const row = await one(`INSERT INTO enquiries (form, name, email, phone, fields, file_id, page, status, service, consult_date, consult_mode, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'new',$8,$9,$10,$11) RETURNING id`,
     [form, name, mail, phone, JSON.stringify(fields), fileId, str(b.page, 200), service, cDate, cMode, nowIso()]);
   await notify(`Website form: ${form}`, { ...fields, 'CV / file': fileId ? 'Uploaded. Open it in the portal under Website enquiries.' : '' }, FORMS_EMAIL);
@@ -990,6 +996,10 @@ async function admEnquiries(admin, b) {
   const rows = await query(`SELECT e.*, f.filename FROM enquiries e LEFT JOIN files f ON f.id = e.file_id ${st ? 'WHERE e.status = $1' : ''} ORDER BY e.id DESC LIMIT 500`, st ? [st] : []);
   return { rows: rows.map((r) => ({ ...r, fields: json(r.fields, {}) })) };
 }
+async function admDeleteService(admin, b) {
+  await query(`DELETE FROM enquiries WHERE id = $1 AND service <> ''`, [int(b.id)]);
+  return { ok: true };
+}
 async function admEnquiryStatus(admin, b) {
   await query(`UPDATE enquiries SET status = $1 WHERE id = $2`, [b.status === 'handled' ? 'handled' : 'new', int(b.id)]);
   return { ok: true };
@@ -1125,7 +1135,7 @@ const PUBLIC = {
 
 /* ================= services tracker (consultations, CV revamp, interview prep, recruitment) ================= */
 const SERVICE_OF_FORM = {
-  'Free career consultation': 'consultation', 'Book free consultation (email)': 'consultation',
+  'Free career consultation': 'consultation',
   'CV Revamp request': 'cv', 'Interview prep booking': 'interview',
   'Recruitment request': 'recruitment', 'Human capital consultation': 'hcm'
 };
@@ -1154,26 +1164,89 @@ async function postSlack(text, blocks) {
     return r.ok;
   } catch (e) { return false; }
 }
+function reviewSig(id, token) {
+  return crypto.createHmac('sha256', process.env.SESSION_SECRET || 'dev').update(`cvreview:${id}:${token}`).digest('hex').slice(0, 40);
+}
 async function sendForReview(e) {
   const base = assetBase();
   const label = SERVICE_LABEL[e.service] || 'Service';
+  // A fresh token for every send, so links from an older version of the CV stop working.
+  const token = crypto.randomBytes(12).toString('hex');
+  await query(`UPDATE enquiries SET review_token = $1 WHERE id = $2`, [token, e.id]);
+  const link = `${base}/api/portal?review=${e.id}&k=${reviewSig(e.id, token)}`;
   const lines = [
     `*Client:* ${e.name || '—'} (${e.email || 'no email'}${e.phone ? ', ' + e.phone : ''})`,
-    `*Service:* ${label}`,
     `*Paid:* ${e.paid_at ? 'Yes (' + e.paid_at + ')' : 'Not yet'}`,
     e.consult_done_at ? `*Consultation held:* ${e.consult_done_at}` : '',
     `*CV finished:* ${e.done_at}`,
     e.track_notes ? `*Notes:* ${e.track_notes}` : ''
   ].filter(Boolean);
-  const fileLine = e.result_file_id ? `\n<${base}/api/portal?file=${e.result_file_id}|Open the finished ${e.service === 'cv' ? 'CV' : 'file'}> (sign in to the portal first)` : '';
   const text = `${label} ready for review: ${e.name || e.email}`;
   const blocks = [
     { type: 'header', text: { type: 'plain_text', text: `${label} ready for review` } },
-    { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') + fileLine } },
-    { type: 'context', elements: [{ type: 'mrkdwn', text: 'Once reviewed, mark it *Approved* or *Changes requested* in the portal.' }] },
-    { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open in the portal' }, url: `${base}/portal#/services` }] }
+    { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
+    { type: 'section', text: { type: 'mrkdwn', text: (e.result_file_id ? `:page_facing_up: <${link}&view=cv|Open the CV>     ` : '') + `:white_check_mark: <${link}|Approve or request changes>` } }
   ];
   return postSlack(text, blocks);
+}
+
+function reviewPage(res, status, title, inner) {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Robots-Tag', 'noindex');
+  res.end(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} | Dé Pitch</title>
+<style>body{margin:0;background:#f4f2ee;font:16px/1.55 -apple-system,'Helvetica Neue',Arial,sans-serif;color:#1a1a1a}main{max-width:560px;margin:40px auto;padding:0 16px}
+.card{background:#fff;border-radius:18px;padding:28px}h1{font-size:1.5rem;margin:0 0 6px}p{margin:.4rem 0}.muted{color:#6b6b6b;font-size:.92rem}
+a.file{display:inline-block;margin:14px 0;color:#011D38;font-weight:600}textarea{width:100%;box-sizing:border-box;min-height:110px;border:1px solid #d8d4cc;border-radius:10px;padding:10px;font:inherit}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}button{border:0;border-radius:999px;padding:12px 22px;font-family:inherit;font-weight:600;font-size:15px;cursor:pointer}
+.ok{background:#1f7a4d;color:#fff}.ch{background:#fff;border:1px solid #1a1a1a;color:#1a1a1a}.pill{display:inline-block;padding:3px 10px;border-radius:999px;background:#eeeae3;font-size:.85rem}
+img{width:110px;display:block;margin-bottom:18px}</style></head><body><main><img src="/assets/images/image07.png" alt="dé pitch"><div class="card">${inner}</div></main></body></html>`);
+}
+
+async function readForm(req) {
+  if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  let raw = typeof req.body === 'string' ? req.body : Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+  if (!raw && req.body === undefined) { const chunks = []; for await (const c of req) chunks.push(c); raw = Buffer.concat(chunks).toString('utf8'); }
+  return Object.fromEntries(new URLSearchParams(raw));
+}
+
+// The page the head of the company opens from Slack to approve a CV or ask for changes.
+async function handleReview(req, res, url) {
+  const id = int(url.searchParams.get('review'));
+  const k = String(url.searchParams.get('k') || '');
+  const e = id ? await one(`SELECT * FROM enquiries WHERE id = $1`, [id]) : null;
+  const valid = e && e.review_token && k.length === 40 && crypto.timingSafeEqual(Buffer.from(k), Buffer.from(reviewSig(e.id, e.review_token)));
+  if (!valid) return reviewPage(res, 404, 'Link expired', '<h1>This link has expired</h1><p class="muted">A newer version of this CV may have been sent for review. Use the latest message in Slack.</p>');
+  if (url.searchParams.get('view') === 'cv') {
+    if (!e.result_file_id) return reviewPage(res, 404, 'No file', '<h1>No CV attached</h1><p class="muted">People Ops did not upload the finished CV with this one.</p>');
+    return downloadFile(res, { id: 0, role: 'admin' }, e.result_file_id, false);
+  }
+  const who = escapeHtml(e.name || e.email);
+  const self = `/api/portal?review=${e.id}&k=${k}`;
+  if (req.method === 'POST') {
+    const f = await readForm(req);
+    const decision = f.decision === 'approved' ? 'approved' : f.decision === 'changes' ? 'changes' : '';
+    const note = str(f.note, 2000);
+    if (!decision) return reviewPage(res, 400, 'Choose', '<h1>Please choose Approve or Request changes.</h1>');
+    if (decision === 'changes' && !note) return reviewPage(res, 400, 'Add a note', `<h1>What should change?</h1><p class="muted">Please go back and write what needs changing, so People Ops can fix it.</p><p><a href="${self}">Back</a></p>`);
+    if (e.delivered_at || e.closed_at) return reviewPage(res, 200, 'Already done', `<h1>Nothing to change</h1><p class="muted">${who}'s CV has already been ${e.delivered_at ? 'delivered' : 'closed'}.</p>`);
+    await query(`UPDATE enquiries SET review_status = $1, review_note = $2, reviewed_at = $3, updated_at = $3 WHERE id = $4`, [decision, note, nowIso(), e.id]);
+    const label = decision === 'approved' ? 'approved' : 'needs changes';
+    await notify(`CV ${label}: ${e.name || e.email}`, { Client: `${e.name} (${e.email})`, Decision: decision === 'approved' ? 'Approved. You can now deliver it to the client.' : 'Changes requested', Note: note });
+    await postSlack(`${decision === 'approved' ? ':white_check_mark: Approved' : ':pencil2: Changes requested'}: ${e.name || e.email}'s CV${note ? '\n>' + note.replace(/\n/g, '\n>') : ''}`);
+    return reviewPage(res, 200, 'Thank you', decision === 'approved'
+      ? `<h1>Approved</h1><p>${who}'s CV is approved. People Ops has been told and can now deliver it.</p>`
+      : `<h1>Changes requested</h1><p>People Ops has your note and will send the updated CV back to Slack.</p>`);
+  }
+  const status = e.review_status === 'approved' ? 'Approved' : e.review_status === 'changes' ? 'Changes requested' : 'Awaiting review';
+  return reviewPage(res, 200, 'Review CV', `<h1>Review ${who}'s CV</h1>
+    <p class="muted">CV revamp · finished ${escapeHtml(e.done_at)} · ${e.paid_at ? 'paid' : 'not paid yet'}</p><p><span class="pill">${status}</span></p>
+    ${e.track_notes ? `<p class="muted">People Ops notes: ${escapeHtml(e.track_notes)}</p>` : ''}
+    ${e.result_file_id ? `<a class="file" href="${self}&view=cv" target="_blank" rel="noopener">Open the CV</a>` : '<p class="muted">No file was attached.</p>'}
+    <form method="POST" action="${self}">${e.review_status === 'changes' && e.review_note ? `<p class="muted">Your last note: ${escapeHtml(e.review_note)}</p>` : ''}<label for="note">Note for People Ops (needed if you request changes)</label>
+    <textarea id="note" name="note" placeholder="e.g. Shorten the summary and add the latest role"></textarea>
+    <div class="row"><button class="ok" name="decision" value="approved">Approve</button><button class="ch" name="decision" value="changes">Request changes</button></div></form>`);
 }
 
 async function admServices() {
@@ -1295,6 +1368,6 @@ const ACTIONS = {
   'emp.referrals': empReferrals, 'emp.submitReferral': empSubmitReferral,
   'adm.enquiries': admEnquiries, 'adm.enquiryStatus': admEnquiryStatus, 'adm.referrals': admReferrals, 'adm.updateReferral': admUpdateReferral,
   'adm.points': admPoints, 'adm.reviewClaim': admReviewClaim, 'adm.awardPoints': admAwardPoints, 'adm.updateRedemption': admUpdateRedemption,
-  'adm.chats': admChats, 'adm.chat': admChat, 'adm.chatReply': admChatReply, 'adm.chatStatus': admChatStatus, 'adm.services': admServices, 'adm.saveService': admSaveService, 'adm.settings': admSettings, 'adm.testPointsEmail': admTestPointsEmail,
+  'adm.chats': admChats, 'adm.chat': admChat, 'adm.chatReply': admChatReply, 'adm.chatStatus': admChatStatus, 'adm.services': admServices, 'adm.saveService': admSaveService, 'adm.deleteService': admDeleteService, 'adm.settings': admSettings, 'adm.testPointsEmail': admTestPointsEmail,
   'adm.announcements': admAnnouncements, 'adm.saveAnnouncement': admSaveAnnouncement, 'adm.deleteAnnouncement': admDeleteAnnouncement
 };

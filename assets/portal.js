@@ -1652,7 +1652,9 @@
         '<label class="field">Finished CV<input type="file" id="sv-file" accept=".pdf,.doc,.docx"><span class="hint">' + (r.result_file_id ? 'Current: ' + fileLink(r.result_file_id, r.result_filename || 'open') + '. Upload again to replace it.' : 'Linked in the Slack message for review.') + '</span></label></div>' +
         (r.done_at ? '<div class="section-label">Review</div><div class="field"><span>Head of company\'s review' + (r.review_sent_at ? ' · sent to Slack ' + esc(fmtDate(r.review_sent_at)) : '') + '</span><div class="seg" id="sv-review">' +
           [['pending', 'Awaiting review'], ['changes', 'Changes requested'], ['approved', 'Approved']].map(function (o) { return '<button type="button" data-rv="' + o[0] + '" class="' + ((r.review_status || 'pending') === o[0] ? 'on' : '') + '">' + o[1] + '</button>'; }).join('') +
-          '</div>' + (r.review_status === 'changes' ? '<span class="hint">Upload the corrected CV above, then use "Send to Slack again".</span>' : '') + '</div>' : '') +
+          '</div>' + (r.review_note ? '<span class="hint"><b>Reviewer\'s note:</b> ' + esc(r.review_note) + '</span>' : '') +
+          (r.review_status === 'changes' ? '<span class="hint">Upload the corrected CV above, then use "Send to Slack again".</span>' : '') +
+          '<span class="hint">The reviewer approves or requests changes from the link in Slack, and it updates here. You can also set it yourself.</span></div>' : '') +
         (approved ? '<div class="grid-2">' + dateField('sv-delivered', 'Delivered to client on', r.delivered_at) + closed + '</div>' : '<div class="grid-2">' + closed + '</div>') +
         (!slackOn ? '<p class="small muted">Slack is not connected yet, so "send for review" only records the date. Add SLACK_WEBHOOK_URL in Vercel to post it to Slack.</p>' : '');
     }
@@ -1677,7 +1679,7 @@
           '<dt>Stage</dt><dd>' + stagePill(r.stage) + '</dd></dl>') +
         '<div id="sv-sections"></div>' +
         '<label class="field">Notes<textarea id="sv-notes">' + esc(r.track_notes || '') + '</textarea></label><p class="error" id="sv-err"></p>',
-      foot: '<button class="btn secondary" data-close type="button">Cancel</button><span id="sv-extra"></span><button class="btn" id="sv-save" type="button">Save</button>'
+      foot: (isNew ? '' : '<button class="btn secondary" id="sv-del" type="button" style="margin-right:auto">Delete</button>') + '<button class="btn secondary" data-close type="button">Cancel</button><span id="sv-extra"></span><button class="btn" id="sv-save" type="button">Save</button>'
     });
     var state = { paid: !!r.paid_at, review: r.review_status || 'pending' };
     function svc() { return isNew ? $('#sv-service', m).value : r.service; }
@@ -1711,6 +1713,10 @@
         }).catch(errIn(m, '#sv-err'));
     }
     if (isNew) $('#sv-service', m).onchange = draw;
+    if ($('#sv-del', m)) $('#sv-del', m).onclick = function () {
+      if (!window.confirm('Delete this record for ' + (r.name || r.email) + '? This cannot be undone.')) return;
+      api('adm.deleteService', { id: r.id }).then(function () { closeModal(); toast('Deleted.'); refreshCounts(); renderShell(); }).catch(errIn(m, '#sv-err'));
+    };
     $('#sv-save', m).onclick = function () { save(this); };
     draw();
   }

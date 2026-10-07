@@ -371,3 +371,6 @@ p { margin: 0; }
 .btn-outline-light { background: transparent; color: var(--white); border-color: rgba(255,255,255,0.6); margin-top: .75rem; }
 .mobile-menu .btn-outline-light { align-self: flex-start; }
 @media (max-width: 820px) { .header-actions { display: none; } }
+
+.date-hint { margin: -.35rem 0 .6rem; opacity: .75; }
+.date-hint.bad { color: #c0392b; opacity: 1; font-weight: 600; }

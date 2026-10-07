@@ -302,14 +302,16 @@ const SCHEMA = [
      ADD COLUMN IF NOT EXISTS delivered_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS closed_at TEXT DEFAULT '',
      ADD COLUMN IF NOT EXISTS review_sent_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS result_file_id INTEGER,
      ADD COLUMN IF NOT EXISTS track_notes TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
-  `UPDATE enquiries SET service = CASE form WHEN 'Free career consultation' THEN 'consultation' WHEN 'Book free consultation (email)' THEN 'consultation'
+  `UPDATE enquiries SET service = CASE form WHEN 'Free career consultation' THEN 'consultation' 
      WHEN 'CV Revamp request' THEN 'cv' WHEN 'Interview prep booking' THEN 'interview' WHEN 'Recruitment request' THEN 'recruitment'
      WHEN 'Human capital consultation' THEN 'hcm' ELSE '' END,
      consult_date = COALESCE(NULLIF(consult_date, ''), COALESCE(fields::json->>'date_of_consultation', '')),
      consult_mode = COALESCE(NULLIF(consult_mode, ''), COALESCE(fields::json->>'mode_of_consultation', ''))
-   WHERE service = '' AND form IN ('Free career consultation','Book free consultation (email)','CV Revamp request','Interview prep booking','Recruitment request','Human capital consultation')`,
+   WHERE service = '' AND form IN ('Free career consultation','CV Revamp request','Interview prep booking','Recruitment request','Human capital consultation')`,
   `ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS interest TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS review_status TEXT DEFAULT '',
      ADD COLUMN IF NOT EXISTS reviewed_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS session_date TEXT DEFAULT ''`,
+  `ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS review_token TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS review_note TEXT DEFAULT ''`,
+  `UPDATE enquiries SET service = '' WHERE form = 'Book free consultation (email)' AND service <> ''`,
   `CREATE INDEX IF NOT EXISTS payroll_user_idx ON payroll (user_id)`,
   `CREATE INDEX IF NOT EXISTS reports_user_idx ON reports (user_id)`,
   `CREATE INDEX IF NOT EXISTS requests_user_idx ON requests (user_id)`,

@@ -498,6 +498,11 @@ async function admUpdateUser(admin, b) {
   const f = userFields(b);
   const active = b.active === false ? false : true;
   if (!active && Number(existing.id) === Number(admin.id)) fail(400, 'You cannot turn off your own account.');
+  if (b.email && String(b.email).trim().toLowerCase() !== existing.email) {
+    const e = email(b.email);
+    if (await one(`SELECT id FROM users WHERE email = $1 AND id <> $2`, [e, id])) fail(400, 'Someone already uses that email.');
+    await query(`UPDATE users SET email = $1, session_version = session_version + 1 WHERE id = $2`, [e, id]);
+  }
   await query(
     `UPDATE users SET name=$1, job_title=$2, phone=$3, employee_code=$4, start_date=$5, pay_currency=$6, monthly_pay=$7, bill_rate=$8,
        bank_name=$9, account_number=$10, client_id=$11, active=$12, session_version = session_version + (CASE WHEN $12 THEN 0 ELSE 1 END) WHERE id=$13`,

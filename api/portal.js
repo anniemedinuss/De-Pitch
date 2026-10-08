@@ -818,7 +818,7 @@ async function pubSlots(rq, b) {
 async function slackFollowUp(e, why) {
   const fields = typeof e.fields === 'string' ? json(e.fields, {}) : (e.fields || {});
   const lines = Object.entries(fields).filter(([, v]) => v).map(([k, v]) => `*${k.replace(/[-_]/g, ' ').replace(/^./, (c) => c.toUpperCase())}:* ${String(v).slice(0, 500)}`);
-  const ok = await postSlack(`Follow up: ${e.form} from ${e.name || e.email}`, [
+  const ok = await postSlackFollowup(`Follow up: ${e.form} from ${e.name || e.email}`, [
     { type: 'header', text: { type: 'plain_text', text: 'Website enquiry: please follow up' } },
     { type: 'section', text: { type: 'mrkdwn', text: `*${e.form}*  ·  ${why}\n` + lines.join('\n') } },
     { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open in the portal' }, url: `${assetBase()}/portal#/enquiries` }] }
@@ -829,14 +829,14 @@ async function slackFollowUp(e, why) {
 async function admEnquiryFollowUp(admin, b) {
   const e = await one(`SELECT * FROM enquiries WHERE id = $1`, [int(b.id)]);
   if (!e) fail(404, 'Not found.');
-  if (!process.env.SLACK_WEBHOOK_URL) fail(400, 'Slack is not connected. Add SLACK_WEBHOOK_URL in Vercel.');
+  if (!followupHook()) fail(400, 'Slack is not connected. Add SLACK_FOLLOWUP_WEBHOOK_URL (or SLACK_WEBHOOK_URL) in Vercel.');
   const ok = await slackFollowUp(e, `sent by ${admin.name || 'People Ops'}`);
   if (!ok) fail(502, 'Slack did not accept the message. Please try again.');
   return { ok: true };
 }
 // Website enquiries still "new" after a while, and chats nobody answered, go to Slack.
 async function sweepFollowUps() {
-  if (!process.env.SLACK_WEBHOOK_URL) return 0;
+  if (!followupHook()) return 0;
   const cutoff = new Date(Date.now() - FOLLOWUP_AFTER_HOURS * 3600000).toISOString();
   const since = new Date(Date.now() - 3 * 86400000).toISOString();
   const due = await query(`SELECT * FROM enquiries WHERE status = 'new' AND followup_at = '' AND created_at < $1 AND created_at > $2 AND form NOT IN ('Early access list','Scoop newsletter','10% off popup') ORDER BY id LIMIT 5`, [cutoff, since]);
@@ -1050,7 +1050,7 @@ async function sweepChats() {
     const msgs = (await chatMessages(c.id)).slice(-15);
     const transcript = msgs.map((m) => `${m.sender === 'visitor' ? c.name : 'Dé Pitch'}: ${m.body}`).join('\n\n');
     await notifyHR(`Unanswered website chat from ${c.name}`, { Name: c.name, Email: c.email, 'Waiting since': c.last_visitor_msg.replace('T', ' ').slice(0, 16) + ' UTC', Conversation: transcript, Reply: 'Open the portal → Live chat to reply. Your reply appears in their chat window.' });
-    await postSlack(`Follow up: unanswered chat from ${c.name}`, [
+    await postSlackFollowup(`Follow up: unanswered chat from ${c.name}`, [
       { type: 'header', text: { type: 'plain_text', text: 'Website chat: please follow up' } },
       { type: 'section', text: { type: 'mrkdwn', text: `*Name:* ${c.name}\n*Email:* ${c.email}\n*Waiting since:* ${c.last_visitor_msg.replace('T', ' ').slice(0, 16)} UTC${inOfficeHours() ? '' : ' (after hours)'}\n\n${transcript.slice(-2500)}` } },
       { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Reply in the portal' }, url: `${assetBase()}/portal#/chat` }] }
@@ -1239,8 +1239,12 @@ function stageOf(e) {
   if (e.consult_date) return 'scheduled';
   return 'new';
 }
-async function postSlack(text, blocks) {
-  const url = process.env.SLACK_WEBHOOK_URL;
+// Follow-ups (website enquiries and unanswered chats) can go to their own channel via SLACK_FOLLOWUP_WEBHOOK_URL;
+// otherwise they share the main channel with CV reviews.
+const followupHook = () => process.env.SLACK_FOLLOWUP_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL;
+function postSlackFollowup(text, blocks) { return postSlack(text, blocks, followupHook()); }
+async function postSlack(text, blocks, hook) {
+  const url = hook || process.env.SLACK_WEBHOOK_URL;
   if (!url) return false;
   try {
     const ctrl = new AbortController();

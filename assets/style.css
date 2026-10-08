@@ -431,3 +431,11 @@ p { margin: 0; }
 .post-share { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; margin-top: 2em !important; font-size: .9rem; color: var(--muted); }
 .post-share a { color: var(--ink); }
 @media (max-width: 1000px) { .post-layout { grid-template-columns: minmax(0, 1fr); max-width: 760px; } .post-toc { display: none; } }
+
+/* Paused services (recruitment, human capital, enterprise). Delete this rule to bring them back. */
+.paused { display: none !important; }
+/* While two service cards are paused, show the remaining two side by side. Remove "cards-paused" from index.html when they come back. */
+.cards.cards-paused { grid-template-columns: repeat(2, 1fr); max-width: 760px; }
+@media (max-width: 560px) { .cards.cards-paused { grid-template-columns: 1fr; } }
+.stats.stats-paused { grid-template-columns: repeat(2, 1fr); max-width: 520px; margin-left: auto; margin-right: auto; }
+.stats.stats-paused .stat:last-child { grid-column: auto; }

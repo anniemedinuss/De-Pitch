@@ -17,6 +17,10 @@ export const CTAS = {
   hcm: { label: 'Talk to us about HR', href: '/enterprise' },
   contact: { label: 'Talk to us', href: '/contact' }
 };
+// Recruitment and human capital are paused for now: posts using those buttons fall back to
+// the free consultation, and the pages stay out of the sitemap. Empty this list to bring them back.
+export const PAUSED_CTAS = ['recruitment', 'hcm'];
+const PAUSED_PAGES = ['/recruitment', '/enterprise'];
 const catLabel = (k) => (CATEGORIES.find((c) => c.key === k) || { label: 'The Scoop' }).label;
 
 function esc(s) {
@@ -123,7 +127,7 @@ export function renderIndex(posts, { base, category }) {
 export function renderPost(p, { base, related = [], preview = false }) {
   const { html, toc } = renderMarkdown(p.body);
   const faq = (Array.isArray(p.faq) ? p.faq : []).filter((x) => x && x.q && x.a);
-  const cta = CTAS[p.cta] || CTAS.consultation;
+  const cta = (!PAUSED_CTAS.includes(p.cta) && CTAS[p.cta]) || CTAS.consultation;
   const url = `${base}/scoop/${p.slug}`;
   const img = imageUrl(p.cover, base);
   const desc = p.seo_description || p.excerpt || '';
@@ -174,7 +178,7 @@ export function renderNotFound(base) {
 }
 
 export function renderSitemap(base, posts) {
-  const pages = ['/', '/about', '/cv-revamp', '/interview-prep', '/recruitment', '/enterprise', '/free-consultation', '/contact', '/scoop', '/privacy-policy', '/terms', '/refund-policy', '/cookie-policy'];
+  const pages = ['/', '/about', '/cv-revamp', '/interview-prep', '/recruitment', '/enterprise', '/free-consultation', '/contact', '/scoop', '/privacy-policy', '/terms', '/refund-policy', '/cookie-policy'].filter((u) => !PAUSED_PAGES.includes(u));
   const urls = pages.map((u) => `<url><loc>${base}${u === '/' ? '/' : u}</loc></url>`)
     .concat(posts.map((p) => `<url><loc>${base}/scoop/${esc(p.slug)}</loc><lastmod>${String(p.updated_at || p.published_at).slice(0, 10)}</lastmod></url>`));
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  ${urls.join('\n  ')}\n</urlset>\n`;

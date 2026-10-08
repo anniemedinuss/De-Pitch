@@ -3,6 +3,8 @@
    Chatway, EmailOctopus) with plain JavaScript. */
 (function () {
   'use strict';
+  // Recruitment / human capital / enterprise are paused for now. Set to false to bring them back.
+  var PAUSE_EMPLOYER = true;
 
   /* ================= SETTINGS — edit these ================= */
   var CONFIG = {
@@ -346,13 +348,13 @@
     }
     if (view === 'refer') {
       pointsPane.innerHTML = '<button type="button" class="cw-link" data-go="home">← Back</button><h5>Refer someone</h5>' +
-        '<p class="cw-intro">You earn points once the person you refer becomes a Dé Pitch client: 300 for a CV revamp, 600 for interview preparation, 3,000 for a recruitment client.</p>' +
+        '<p class="cw-intro">You earn points once the person you refer becomes a Dé Pitch client: 300 for a CV revamp and 600 for interview preparation.' + (PAUSE_EMPLOYER ? '' : ' 3,000 for a recruitment client.') + '</p>' +
         '<form class="cw-form" id="cw-claim"><input class="hp" name="hp" tabindex="-1" autocomplete="off" aria-hidden="true">' + memberFields() +
         '<label>Their full name<input name="ref_name" required maxlength="120"></label>' +
         '<label>Their email<input type="email" name="ref_email" maxlength="160"></label>' +
         '<label>Their phone<input name="ref_phone" maxlength="40"></label>' +
-        '<label>What they need<select name="ref_service" required><option value="">Choose a service</option><option value="cv">CV revamp</option><option value="interview">Interview preparation</option><option value="recruitment">Recruitment (a company hiring)</option></select></label>' +
-        '<label>Company (if hiring)<input name="ref_company" maxlength="160"></label>' +
+        '<label>What they need<select name="ref_service" required><option value="">Choose a service</option><option value="cv">CV revamp</option><option value="interview">Interview preparation</option>' + (PAUSE_EMPLOYER ? '' : '<option value="recruitment">Recruitment (a company hiring)</option>') + '</select></label>' +
+        (PAUSE_EMPLOYER ? '' : '<label>Company (if hiring)<input name="ref_company" maxlength="160"></label>') +
         '<p class="cw-err" role="alert"></p><button class="btn btn-dark" type="submit">Send referral</button></form>';
     }
     var form = pointsPane.querySelector('#cw-claim');

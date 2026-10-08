@@ -137,6 +137,25 @@ export const TEMPLATES = [
       f('button_label', 'Button text', 'text', 'Read more on our site'),
       f('button_url', 'Button link', 'url', 'https://www.depitchhq.com/scoop')
     ]
+  },
+  {
+    id: 'welcome', name: 'Welcome', description: 'Deep navy frame with a soft sage card, a big word over the photo, a round photo, your story and a welcome note. Used for the automatic newsletter welcome.',
+    fields: [
+      f('hero_image', 'Top photo', 'image', 'studio'),
+      f('hero_word', 'Big word on the photo', 'text', 'WELCOME'),
+      f('headline', 'Headline', 'text', 'Welcome to Dé Pitch, {{first_name}}'),
+      f('body', 'Message', 'textarea', 'Thank you for joining us. Your welcome gift is ready: a free career consultation and a 20-point head start on Dé Pitch rewards.'),
+      f('gift', 'Gift box (one per line)', 'textarea', 'Free career consultation\n20 points head start'),
+      f('button_label', 'Button text', 'text', 'Book my free consultation'),
+      f('button_url', 'Button link', 'url', 'https://www.depitchhq.com/free-consultation'),
+      f('round_image', 'Round photo', 'image', 'hero'),
+      f('story_title', 'Story heading', 'text', 'The story of Dé Pitch'),
+      f('story_text', 'Story', 'textarea', 'Dé Pitch began with a simple observation: most people spend their lives in jobs that don’t fit. We started because we believed work could be different, more human, more real.\n\nWhether you’re climbing the corporate ladder, building your own venture or finding your way in the gig economy, we meet you where you are and help you pitch yourself with clarity, confidence and purpose.'),
+      f('story_image', 'Story photo', 'image', 'meeting'),
+      f('welcome_title', 'Closing heading', 'text', 'Your points are waiting'),
+      f('welcome_text', 'Closing text', 'textarea', 'Check your points any time: open the chat button on our website, choose Points & rewards, and enter your name and this email address. Keep earning by referring friends and leaving us a review.'),
+      f('help_text', 'Small help text', 'textarea', 'Questions? Reply to this email or write to office@depitchhq.com. We reply Monday to Friday, 10am to 5pm (WAT).')
+    ]
   }
 ];
 
@@ -298,6 +317,41 @@ export function renderCampaign(templateId, content, ctx) {
     <div style="font:15px/1.6 ${FONT};color:#ffffff;margin:10px 0 22px">${P(c.end_text)}</div>
     <a href="${url(c.button_url)}" style="display:inline-block;background:#ffffff;color:#1a1a1a;font:600 18px ${FONT};text-decoration:none;padding:14px 40px;border-radius:8px">${P(c.button_label)}</a>
     <div style="padding-top:26px"><img src="${logoLight}" width="120" alt="dé pitch" style="display:inline-block;width:120px;height:auto"></div></td></tr>`,
+    { preheader: ctx.preheader, footer: footer() });
+  }
+
+  if (t.id === 'welcome') {
+    const NAVY = '#011D38', SAGE = '#e3ede6', ACC = '#7fae8a', INK = '#0f2a1f';
+    const gifts = lines(c.gift).map((x) => `<tr><td style="padding:6px 0;font:600 15px ${FONT};color:${NAVY}"><span style="display:inline-block;width:22px;height:22px;border-radius:50%;background:${ACC};color:#fff;text-align:center;font:700 13px/22px ${FONT};margin-right:10px">&#10003;</span>${P(x)}</td></tr>`).join('');
+    const nav = (label, href) => `<a href="${esc(href)}" style="color:#ffffff;text-decoration:none;font:500 12px ${FONT};letter-spacing:.06em">${label}</a>`;
+    return wrap('#dfeee3', `
+  <tr><td style="background:${NAVY};border-radius:28px 28px 0 0;padding:26px 30px 22px">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td valign="middle"><img src="${logoLight}" width="120" alt="dé pitch" style="display:block;width:120px;height:auto"></td>
+      <td align="right" valign="middle" class="hide-m">${nav('SERVICES', (ctx.siteUrl || '') + '/#services')} <span style="color:#7d93a8">&nbsp;|&nbsp;</span> ${nav('OUR STORY', (ctx.siteUrl || '') + '/about')} <span style="color:#7d93a8">&nbsp;|&nbsp;</span> ${nav('CONTACT', (ctx.siteUrl || '') + '/contact')}</td>
+    </tr></table></td></tr>
+  <tr><td style="background:${NAVY};padding:0 22px">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${SAGE};border-radius:22px 22px 0 0"><tr><td style="padding:0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td background="${img(c.hero_image)}" bgcolor="${SAGE}" style="background:${SAGE} url('${img(c.hero_image)}') center/cover no-repeat;height:400px;border-radius:22px 22px 0 0" align="center" valign="middle">
+          <div class="big" style="font:900 72px/1 ${FONT};color:${NAVY};letter-spacing:-.03em;opacity:.92;text-shadow:0 2px 0 rgba(255,255,255,.35)">${P(c.hero_word)}</div></td></tr></table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr><td align="center" style="padding:30px 40px 10px;font:700 24px/1.25 ${FONT};color:${INK}">${P(c.headline)}</td></tr>
+        <tr><td align="center" style="padding:0 48px 18px;font:15px/1.65 ${FONT};color:#24382d">${P(c.body).replace(/\n/g, '<br>')}</td></tr>
+        ${gifts ? `<tr><td align="center" style="padding:0 40px 22px"><table role="presentation" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px"><tr><td style="padding:16px 26px"><table role="presentation" cellpadding="0" cellspacing="0">${gifts}</table></td></tr></table></td></tr>` : ''}
+        <tr><td align="center" style="padding:0 0 34px">${pill(c.button_label, c.button_url, ACC, '#ffffff')}</td></tr>
+        <tr><td align="center" style="padding:0 0 30px"><img src="${img(c.round_image)}" width="220" height="220" alt="" style="display:block;width:220px;height:220px;object-fit:cover;border-radius:50%;border:8px solid #ffffff;box-shadow:0 14px 30px rgba(0,0,0,.25)"></td></tr>
+      </table></td></tr></table></td></tr>
+  <tr><td style="background:${NAVY};padding:46px 46px 10px" align="center">
+    <div style="font:800 24px/1.2 ${FONT};color:#ffffff;text-transform:uppercase;letter-spacing:.01em">${P(c.story_title)}</div>
+    <div style="font:14px/1.7 ${FONT};color:#d6e2dc;margin-top:14px">${para(c.story_text, 'color:#d6e2dc')}</div></td></tr>
+  <tr><td style="background:${NAVY};padding:10px 46px 0" align="center"><img src="${img(c.story_image)}" width="420" alt="" style="display:block;width:100%;max-width:420px;height:auto;border-radius:18px"></td></tr>
+  <tr><td style="background:${NAVY};border-radius:0 0 28px 28px;padding:26px 22px 22px">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${SAGE};border-radius:22px"><tr><td align="center" style="padding:30px 36px 26px">
+      <div style="font:800 22px ${FONT};color:${INK};text-transform:uppercase">${P(c.welcome_title)}</div>
+      <div style="font:15px/1.65 ${FONT};color:#24382d;margin:12px 0 18px">${P(c.welcome_text).replace(/\n/g, '<br>')}</div>
+      <div style="font:12px/1.6 ${FONT};color:#4e6157">${P(c.help_text).replace(/\n/g, '<br>')}</div>
+    </td></tr></table></td></tr>`,
     { preheader: ctx.preheader, footer: footer() });
   }
 

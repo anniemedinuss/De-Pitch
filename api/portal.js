@@ -790,6 +790,8 @@ const REWARDS = {
 };
 const CHAT_EMAIL_AFTER_MIN = Number(process.env.CHAT_EMAIL_AFTER_MINUTES || 10);
 const FORMS_EMAIL = process.env.FORMS_EMAIL || 'office@depitchhq.com';
+const RELATIONS_EMAIL = process.env.RELATIONS_EMAIL || 'relations@depitchhq.com';
+const WELCOME_POINTS = 20;
 // Bookable consultation slots (WAT), Monday to Friday.
 const SLOTS = ['11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00', '14:30'];
 const slotLabel = (t) => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${h > 12 ? h - 12 : h}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
@@ -864,7 +866,10 @@ async function pendingRedeem(memberId) {
 }
 async function findMember(name, emailAddr) {
   const m = await one(`SELECT * FROM members WHERE email = $1`, [emailAddr]);
-  if (!m || !namesMatch(m.name, name)) return null;
+  if (!m) return null;
+  // Sign-ups that only gave an email: the first name they look up with becomes theirs.
+  if (!m.name && name) { await query(`UPDATE members SET name = $1 WHERE id = $2`, [str(name, 120), m.id]); m.name = str(name, 120); return m; }
+  if (!namesMatch(m.name, name)) return null;
   return m;
 }
 async function upsertMember(name, emailAddr, phone) {
@@ -930,7 +935,7 @@ async function pubForm(rq, b) {
   }
   const row = await one(`INSERT INTO enquiries (form, name, email, phone, fields, file_id, page, status, service, consult_date, consult_mode, consult_time, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'new',$8,$9,$10,$11,$12) RETURNING *`,
     [form, name, mail, phone, JSON.stringify(fields), fileId, str(b.page, 200), service, cDate, cMode, cTime, nowIso()]);
-  await notify(`Website form: ${form}`, { ...fields, 'CV / file': fileId ? 'Uploaded. Open it in the portal under Website enquiries.' : '' }, FORMS_EMAIL);
+  await notify(`Website form: ${form}`, { ...fields, 'CV / file': fileId ? 'Uploaded. Open it in the portal under Website enquiries.' : '' }, NOT_ENQUIRIES.includes(form) ? RELATIONS_EMAIL : FORMS_EMAIL);
   if (!NOT_ENQUIRIES.includes(form) && !inOfficeHours()) await slackFollowUp(row, 'sent after working hours');
   await addContactFromForm(form, service, name, mail);
   return { ok: true, id: row.id };
@@ -1444,7 +1449,27 @@ function splitName(n) { const p = str(n, 160).split(/\s+/).filter(Boolean); retu
 async function addContactFromForm(form, service, name, mail) {
   const tag = ['Early access list', 'Scoop newsletter', '10% off popup'].includes(form) ? 'Subscriber' : form === 'Collab request' ? 'Partnership' : '';
   if (!tag || !mail) return;
-  try { await upsertContact({ email: mail, ...splitName(name), tags: [tag], source: form }); } catch (e) { console.error('contact', e.message); }
+  try {
+    await upsertContact({ email: mail, ...splitName(name), tags: [tag], source: form });
+    if (tag === 'Subscriber') await sendWelcome(mail, name, form);
+  } catch (e) { console.error('contact', e.message); }
+}
+
+// Newsletter welcome: a free career consultation and a 20-point head start, sent once per person.
+async function sendWelcome(mail, name, form) {
+  const c = await one(`SELECT * FROM contacts WHERE email = $1`, [String(mail).toLowerCase()]);
+  if (!c || c.status !== 'subscribed' || c.welcomed_at) return false;
+  await query(`UPDATE contacts SET welcomed_at = $1 WHERE id = $2`, [nowIso(), c.id]);
+  const member = await upsertMember(str(name, 120), c.email, '');
+  const had = await one(`SELECT id FROM points_ledger WHERE member_id = $1 AND kind = 'welcome'`, [member.id]);
+  if (!had) await query(`INSERT INTO points_ledger (member_id, points, kind, reason, created_by, created_at) VALUES ($1,$2,'welcome','Newsletter welcome gift',NULL,$3)`, [member.id, WELCOME_POINTS, nowIso()]);
+  if (!canEmailVisitors()) return false;
+  const first = c.first_name || splitName(name).first_name;
+  const content = {};
+  if (!first) content.headline = 'Welcome to Dé Pitch';
+  if (form === '10% off popup') content.gift = 'Free career consultation\n20 points head start\n10% off your first service';
+  const html = renderCampaign('welcome', content, { firstName: first || 'there', assetBase: assetBase(), siteUrl: assetBase(), preheader: 'Your welcome gift: a free career consultation and 20 points.', unsubUrl: unsubUrl(c.id) });
+  return sendEmail({ to: c.email, subject: first ? `Welcome to Dé Pitch, ${first}. Your gift is inside` : 'Welcome to Dé Pitch. Your gift is inside', html, replyTo: FORMS_EMAIL });
 }
 
 async function mktContacts(u) {

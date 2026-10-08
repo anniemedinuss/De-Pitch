@@ -327,6 +327,7 @@ const SCHEMA = [
     campaign_id INTEGER NOT NULL, contact_id INTEGER NOT NULL, email TEXT DEFAULT '', first_name TEXT DEFAULT '',
     status TEXT DEFAULT 'queued', error TEXT DEFAULT '', sent_at TEXT DEFAULT '', opened_at TEXT DEFAULT '',
     PRIMARY KEY (campaign_id, contact_id))`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS welcomed_at TEXT DEFAULT ''`,
   `CREATE INDEX IF NOT EXISTS payroll_user_idx ON payroll (user_id)`,
   `CREATE INDEX IF NOT EXISTS reports_user_idx ON reports (user_id)`,
   `CREATE INDEX IF NOT EXISTS requests_user_idx ON requests (user_id)`,

@@ -1839,7 +1839,7 @@
   function campaignEditor(el, id) {
     return Promise.all([mktMeta(), id ? api('mkt.campaign', { id: id }) : Promise.resolve(null), api('mkt.contacts'), api('mkt.images')]).then(function (res) {
       var meta = res[0], data = res[1], aud = res[2], uploads = res[3].rows;
-      var c = data ? data.campaign : { name: '', subject: '', preheader: '', template: '', content: {}, audience: ['clients'], status: 'draft' };
+      var c = data ? data.campaign : { name: '', subject: '', preheader: '', template: '', content: {}, audience: aud.internal ? ['tag:Employee'] : ['clients'], status: 'draft' };
       if (c.status !== 'draft') return campaignReport(el, data, aud);
       var tplById = {}; meta.templates.forEach(function (t) { tplById[t.id] = t; });
       var state = { id: c.id || null, template: c.template, content: c.content || {}, audience: c.audience || [] };
@@ -1989,7 +1989,7 @@
     var seg = sessionStorage.getItem('dp_aud_seg') || 'all';
     var q = sessionStorage.getItem('dp_aud_q') || '';
     return api('mkt.contacts').then(function (j) {
-      var segs = j.segments.concat([{ key: 'unsub', label: 'Unsubscribed', count: j.unsubscribed }]);
+      var segs = (j.internal ? [{ key: 'all', label: 'Everyone', count: j.rows.length }] : []).concat(j.segments, [{ key: 'unsub', label: 'Unsubscribed', count: j.unsubscribed }]);
       var rows = j.rows.filter(function (c) {
         if (seg === 'unsub') { if (c.status === 'subscribed') return false; }
         else if (seg !== 'all') {
@@ -1999,8 +1999,8 @@
         if (q) { var s = (c.first_name + ' ' + c.last_name + ' ' + c.email + ' ' + c.tags).toLowerCase(); if (s.indexOf(q.toLowerCase()) === -1) return false; }
         return true;
       });
-      el.innerHTML = head('Audience', 'Everyone you can email, grouped by tags. Clients are job seeker clients and recruitment clients together.',
-          '<button class="btn secondary" id="au-portal" type="button">Add from portal</button><button class="btn secondary" id="au-import" type="button">Import</button><button class="btn" id="au-add" type="button">+ Add contact</button>') +
+      el.innerHTML = head('Audience', j.internal ? 'The Dé Pitch team: employees and co-founders. Client emails are handled by the relations account.' : 'Everyone you can email, grouped by tags. Clients are job seeker clients and recruitment clients together.',
+          (j.internal ? '' : '<button class="btn secondary" id="au-portal" type="button">Add from portal</button>') + '<button class="btn secondary" id="au-import" type="button">Import</button><button class="btn" id="au-add" type="button">+ Add contact</button>') +
         '<div class="seg">' + segs.map(function (s) { return '<button type="button" data-g="' + esc(s.key) + '" class="' + (seg === s.key ? 'on' : '') + '">' + esc(s.label) + ' (' + s.count + ')</button>'; }).join('') + '</div>' +
         '<div class="row"><input class="input" id="au-q" placeholder="Search name, email or tag" value="' + esc(q) + '" style="max-width:320px"><span class="small muted">' + rows.length + ' shown</span></div>' +
         table(['Name', 'Email', 'Tags', 'Status', 'Added', '>'], rows.map(function (c) {
@@ -2014,7 +2014,7 @@
       $('#au-add', el).onclick = function () { contactModal(null, j.tags); };
       $$('[data-c]', el).forEach(function (b) { b.onclick = function () { contactModal(j.rows.filter(function (c) { return c.id === Number(b.getAttribute('data-c')); })[0], j.tags); }; });
       $('#au-import', el).onclick = function () { importModal(j.tags); };
-      $('#au-portal', el).onclick = function () {
+      if ($('#au-portal', el)) $('#au-portal', el).onclick = function () {
         var b = this;
         if (!window.confirm('Add people from the portal?\n\n• CV, interview prep and consultation clients → Job seeker clients\n• Recruitment and HR requests, and client companies → Recruitment clients\n• Newsletter sign-ups → Subscribers, collab requests → Partnership\n\nPeople who unsubscribed stay unsubscribed.')) return;
         busy(b, true, 'Adding…');

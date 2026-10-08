@@ -1405,6 +1405,11 @@ function normTag(t) {
   if (/^subscriber|^newsletter/.test(k)) return 'Subscriber';
   return TAGS.find((t) => t.toLowerCase() === x.toLowerCase()) || x.replace(/\b\w/g, (c) => c.toUpperCase());
 }
+// People Ops only emails the internal team; Media (relations@) has the full audience.
+const INTERNAL_TAGS = ['Employee', 'Co Founder'];
+const internalOnly = (u) => u && u.role === 'admin';
+const isInternal = (c) => tagsOf(c).some((t) => INTERNAL_TAGS.includes(t));
+const allowedAudience = (u, aud) => (Array.isArray(aud) ? aud : []).filter((s) => !internalOnly(u) || INTERNAL_TAGS.includes(String(s).replace(/^tag:/, '')));
 const tagList = (v) => [...new Set((Array.isArray(v) ? v : String(v || '').split(/[,;|]/)).map(normTag).filter(Boolean))];
 const tagsOf = (c) => String(c.tags || '').split(',').filter(Boolean);
 function matchesAudience(c, aud) {
@@ -1442,8 +1447,13 @@ async function addContactFromForm(form, service, name, mail) {
   try { await upsertContact({ email: mail, ...splitName(name), tags: [tag], source: form }); } catch (e) { console.error('contact', e.message); }
 }
 
-async function mktContacts() {
-  const rows = await query(`SELECT * FROM contacts ORDER BY id DESC LIMIT 5000`);
+async function mktContacts(u) {
+  let rows = await query(`SELECT * FROM contacts ORDER BY id DESC LIMIT 5000`);
+  if (internalOnly(u)) {
+    rows = rows.filter(isInternal);
+    const segments = [['tag:Employee', 'Employees'], ['tag:Co Founder', 'Co-founders']].map(([k, label]) => ({ key: k, label, count: rows.filter((c) => matchesAudience(c, [k])).length }));
+    return { rows, segments, tags: INTERNAL_TAGS, unsubscribed: rows.filter((c) => c.status !== 'subscribed').length, internal: true };
+  }
   const segments = SEGMENTS.map(([k, label]) => ({ key: k, label, count: rows.filter((c) => matchesAudience(c, [k])).length }));
   const custom = [...new Set(rows.flatMap(tagsOf))].filter((t) => !TAGS.includes(t));
   for (const t of custom) segments.push({ key: 'tag:' + t, label: t, count: rows.filter((c) => matchesAudience(c, ['tag:' + t])).length });
@@ -1451,6 +1461,11 @@ async function mktContacts() {
 }
 async function mktSaveContact(u, b) {
   const id = int(b.id);
+  if (internalOnly(u)) {
+    b.tags = tagList(b.tags).filter((t) => INTERNAL_TAGS.includes(t));
+    if (!b.tags.length) fail(400, 'Choose Employee or Co Founder.');
+    if (id) { const ex = await one(`SELECT tags FROM contacts WHERE id = $1`, [id]); if (ex && !isInternal(ex)) fail(403, 'Not allowed.'); }
+  }
   const e = email(b.email);
   const dupe = await one(`SELECT id FROM contacts WHERE email = $1`, [e]);
   if (dupe && Number(dupe.id) !== id) fail(400, 'That email is already in your audience.');
@@ -1465,9 +1480,12 @@ async function mktSaveContact(u, b) {
     [e, str(b.first_name, 80), str(b.last_name, 80), tags, status, str(b.notes, 500), nowIso()]);
   return { id: r.id };
 }
-async function mktDeleteContact(u, b) { await query(`DELETE FROM contacts WHERE id = $1`, [int(b.id)]); return { ok: true }; }
+async function mktDeleteContact(u, b) {
+  if (internalOnly(u)) { const ex = await one(`SELECT tags FROM contacts WHERE id = $1`, [int(b.id)]); if (ex && !isInternal(ex)) fail(403, 'Not allowed.'); }
+  await query(`DELETE FROM contacts WHERE id = $1`, [int(b.id)]); return { ok: true }; }
 async function mktImportContacts(u, b) {
-  const rows = Array.isArray(b.rows) ? b.rows.slice(0, 5000) : [];
+  let rows = Array.isArray(b.rows) ? b.rows.slice(0, 5000) : [];
+  if (internalOnly(u)) rows = rows.map((r) => ({ ...r, tags: tagList(r.tags).filter((t) => INTERNAL_TAGS.includes(t)) })).filter((r) => r.tags.length);
   const out = { added: 0, updated: 0, skipped: 0 };
   for (const r of rows) {
     let first = str(r.first_name, 80), last = str(r.last_name, 80);
@@ -1479,7 +1497,8 @@ async function mktImportContacts(u, b) {
   }
   return out;
 }
-async function mktImportFromPortal() {
+async function mktImportFromPortal(u) {
+  if (internalOnly(u)) fail(403, 'Only the relations account can add clients to the audience.');
   const out = { added: 0, updated: 0, skipped: 0 };
   const svc = await query(`SELECT name, email, service FROM enquiries WHERE service <> '' AND email <> ''`);
   for (const r of svc) out[await upsertContact({ email: r.email, ...splitName(r.name), tags: [['recruitment', 'hcm'].includes(r.service) ? 'Recruitment Client' : 'Jobseeker Client'], source: 'Services' })]++;
@@ -1523,7 +1542,7 @@ async function mktSaveCampaign(u, b) {
   const tpl = templateById(str(b.template, 30)).id;
   const content = {};
   for (const fd of templateById(tpl).fields) if (b.content && b.content[fd.key] != null) content[fd.key] = str(b.content[fd.key], 4000);
-  const aud = (Array.isArray(b.audience) ? b.audience : []).map((x) => str(x, 80)).filter(Boolean);
+  const aud = allowedAudience(u, (Array.isArray(b.audience) ? b.audience : []).map((x) => str(x, 80)).filter(Boolean));
   const vals = [str(b.name, 160) || str(b.subject, 160) || 'Untitled campaign', str(b.subject, 200), str(b.preheader, 200), tpl, JSON.stringify(content), JSON.stringify(aud), nowIso()];
   if (id) { await query(`UPDATE campaigns SET name=$1, subject=$2, preheader=$3, template=$4, content=$5, audience=$6, updated_at=$7 WHERE id=$8`, [...vals, id]); return { id }; }
   const r = await one(`INSERT INTO campaigns (name, subject, preheader, template, content, audience, updated_at, created_at, created_by, status) VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,'draft') RETURNING id`, [...vals, u.id || null]);
@@ -1544,7 +1563,7 @@ async function mktDeleteCampaign(u, b) {
 }
 async function mktAudienceCount(u, b) {
   const rows = await query(`SELECT id, tags, status FROM contacts`);
-  return { count: rows.filter((c) => matchesAudience(c, b.audience)).length };
+  return { count: rows.filter((c) => matchesAudience(c, allowedAudience(u, b.audience))).length };
 }
 async function mktSendTest(u, b) {
   const to = email(b.to);
@@ -1589,7 +1608,7 @@ async function mktSend(u, b) {
   if (!c.subject) fail(400, 'Add a subject line first.');
   if (!process.env.RESEND_API_KEY) fail(400, 'Email sending is not set up yet (RESEND_API_KEY).');
   if (c.status === 'draft') {
-    const contacts = (await query(`SELECT * FROM contacts WHERE status = 'subscribed'`)).filter((x) => matchesAudience(x, json(c.audience, [])));
+    const contacts = (await query(`SELECT * FROM contacts WHERE status = 'subscribed'`)).filter((x) => matchesAudience(x, allowedAudience(u, json(c.audience, []))));
     if (!contacts.length) fail(400, 'Nobody in this audience yet.');
     for (const x of contacts) {
       await query(`INSERT INTO campaign_sends (campaign_id, contact_id, email, first_name, status) VALUES ($1,$2,$3,$4,'queued') ON CONFLICT DO NOTHING`, [c.id, x.id, x.email, x.first_name]);

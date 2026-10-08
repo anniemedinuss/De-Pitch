@@ -28,7 +28,7 @@
             if (r.status === 401 && ['login', 'session', 'setup'].indexOf(action) === -1) { S.user = null; renderLogin(j.error); }
             if (j.mustChange) { renderChangePassword(); }
             var e = new Error(j.error || 'Something went wrong. Please try again.');
-            e.status = r.status;
+            e.status = r.status; e.code = j.code;
             throw e;
           }
           return j;
@@ -68,9 +68,9 @@
   var PILL = {
     paid: 'ok', approved: 'ok', filled: 'ok', acknowledged: 'ok', active: 'ok',
     pending: 'warn', submitted: 'warn', new: 'warn', contacted: 'info', placed: 'ok', signed: 'ok', unsuccessful: 'mute', fulfilled: 'ok', handled: 'mute', open: 'info', draft: 'warn', in_progress: 'info', sent: 'info', shortlist_sent: 'info',
-    declined: 'bad', changes_requested: 'bad', closed: 'mute', inactive: 'mute'
+    declined: 'bad', changes_requested: 'bad', valid: 'ok', invalid: 'bad', closed: 'mute', inactive: 'mute'
   };
-  var LABEL = { in_progress: 'in progress', shortlist_sent: 'shortlist sent', changes_requested: 'changes requested', time_off: 'time off', sent: 'awaiting payment' };
+  var LABEL = { invalid: 'not valid', in_progress: 'in progress', shortlist_sent: 'shortlist sent', changes_requested: 'changes requested', time_off: 'time off', sent: 'awaiting payment' };
   function cap(t) { t = String(t || ''); return t.charAt(0).toUpperCase() + t.slice(1); }
   function pill(status, text) { return '<span class="pill ' + (PILL[status] || 'mute') + '">' + esc(cap(text || LABEL[status] || status)) + '</span>'; }
 
@@ -473,7 +473,7 @@
       var ytd = rows.filter(function (r) { return r.period.indexOf(year) === 0 && r.status === 'paid'; }).reduce(function (s, r) { return s + Number(r.net); }, 0);
       var lastPaid = rows.filter(function (r) { return r.status === 'paid'; })[0];
       var lr = j.lastReport;
-      el.innerHTML = announceBar() +
+      el.innerHTML = announceBar() + reportReminder(lr && lr.week_start >= lagosWeekStart()) +
         head('Hi, ' + j.profile.name.split(' ')[0], esc([j.profile.job_title, j.profile.client_name ? 'placed with ' + j.profile.client_name : ''].filter(Boolean).join(' · '))) +
         '<div class="stats">' +
         '<div class="stat hero"><span class="label">' + esc(MONTHS[new Date().getMonth()]) + ' earnings</span><span class="value">' + (thisMonth ? money(thisMonth.net, thisMonth.currency) : '—') + '</span>' +
@@ -515,6 +515,33 @@
     var mon = addDays(isoToday(), -dow);
     return { start: mon, end: addDays(mon, 4) };
   }
+  /* Weekly report deadline: due Friday 5pm, closes 6pm (Lagos time, UTC+1). */
+  function lagosNow() { return new Date(Date.now() + 3600000); }
+  function lagosWeekStart() { var n = lagosNow(); var d = n.toISOString().slice(0, 10); var t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() - ((n.getUTCDay() + 6) % 7)); return t.toISOString().slice(0, 10); }
+  function reportFriday(ws) { var t = new Date(ws + 'T00:00:00Z'); var dow = t.getUTCDay(); t.setUTCDate(t.getUTCDate() + (dow <= 5 ? 5 - dow : 6)); return t.toISOString().slice(0, 10); }
+  function reportLocked(ws) { return /^\d{4}-\d{2}-\d{2}$/.test(ws) && Date.now() > Date.parse(reportFriday(ws) + 'T18:00:00+01:00'); }
+  function reportReminder(submittedThisWeek) {
+    if (submittedThisWeek) return '';
+    var n = lagosNow(), day = n.getUTCDay(), h = n.getUTCHours(), ws = lagosWeekStart();
+    var msg, cls = 'remind';
+    if (reportLocked(ws)) { msg = 'This week’s report closed on Friday at 6pm. <a href="#/reports">Tell People Ops why it’s late</a>.'; cls += ' bad'; }
+    else if (day === 5 && h >= 17) { msg = 'Your weekly report is overdue. The form closes at <b>6pm today</b>. <a href="#/reports">Submit it now</a>.'; cls += ' bad'; }
+    else if (day === 5) { msg = 'Reminder: your weekly report is due <b>today by 5pm</b>. <a href="#/reports">Submit it now</a>.'; cls += ' warn'; }
+    else msg = 'This week’s report is due <b>Friday by 5pm</b>. The form closes at 6pm.';
+    return '<div class="' + cls + '"><span class="tag">Weekly report</span><span>' + msg + '</span></div>';
+  }
+  function lateExcuseModal(ws, we, done) {
+    var m = openModal({ title: 'Why is your report late?',
+      body: '<p class="small muted">Week of ' + esc(fmtDate(ws)) + '. People Ops will review your reason. If they accept it, you can submit this week’s report.</p>' +
+        '<label class="field">Your reason<textarea id="lx-reason" rows="5" placeholder="Explain what happened"></textarea></label><p class="error" id="lx-error"></p>',
+      foot: '<button class="btn secondary" data-close type="button">Cancel</button><button class="btn" id="lx-send" type="button">Send to People Ops</button>' });
+    $('#lx-send', m).onclick = function () {
+      var b = this; busy(b, true, 'Sending…');
+      api('emp.lateExcuse', { week_start: ws, week_end: we, reason: $('#lx-reason', m).value })
+        .then(function () { closeModal(); toast('Sent to People Ops.'); if (done) done(); })
+        .catch(function (x) { $('#lx-error', m).textContent = x.message; busy(b, false); });
+    };
+  }
   var STATUSES = ['Completed', 'In progress', 'Not started', 'Blocked', 'Ongoing'];
 
   function taskLine(i, t) {
@@ -539,7 +566,10 @@
   EMP.reports = function (el) {
     return api('emp.reports').then(function (j) {
       var wb = weekBounds();
-      el.innerHTML = announceBar() + head('Weekly reports', 'Submit one report each week. People Ops reviews it and you will see the decision here.') +
+      var excuses = j.excuses || [];
+      var submitted = function (ws) { return j.rows.some(function (r) { return r.week_start === ws; }); };
+      el.innerHTML = announceBar() + reportReminder(submitted(lagosWeekStart())) +
+        head('Weekly reports', 'Submit one report each week, due Friday by 5pm. The form closes at 6pm. People Ops reviews it and you will see the decision here.') +
         '<form class="panel stack" id="wr" novalidate>' +
         '<div class="grid-3"><label class="field">Client assigned<input name="client_name" id="wr-client" value="' + esc(S.user.client_name) + '" placeholder="Client name"></label>' +
         '<label class="field">Week start date<input type="date" name="week_start" id="wr-start" value="' + wb.start + '" required></label>' +
@@ -553,7 +583,13 @@
         '<div class="line-head blocker-line"><span>Issue encountered</span><span>Impact</span><span>Action taken</span><span>Support needed</span><span></span></div>' +
         '<div class="lines" id="wr-blockers">' + blockerLine() + '</div>' +
         '<div><button class="btn sm secondary" id="add-blocker" type="button">+ Add blocker</button></div>' +
-        '<p class="error" id="wr-error"></p><div class="row" style="justify-content:flex-end"><button class="btn" type="submit">Submit weekly report</button></div></form>' +
+        '<div id="wr-gate"></div>' +
+        '<p class="error" id="wr-error"></p><div class="row" style="justify-content:flex-end"><button class="btn" type="submit" id="wr-submit">Submit weekly report</button></div></form>' +
+        (excuses.length ? '<div class="panel"><div class="panel-head"><h2>Late report explanations</h2></div>' +
+          table(['Week', 'Your reason', 'Sent', 'Decision', 'People Ops note'], excuses.map(function (x) {
+            return '<tr><td><b>' + esc(fmtDate(x.week_start)) + '</b></td><td class="small">' + esc(x.reason) + '</td><td>' + esc(fmtDate(String(x.created_at).slice(0, 10))) + '</td><td>' +
+              (x.used_at ? pill('approved', 'Report submitted') : pill(x.status, x.status === 'pending' ? 'Waiting for People Ops' : x.status === 'valid' ? 'Accepted, submit now' : 'Not accepted')) + '</td><td class="small">' + esc(x.hr_note) + '</td></tr>';
+          }), '') + '</div>' : '') +
         '<div class="panel"><div class="panel-head"><h2>Your reports</h2></div>' +
         table(['Week', 'Client', '>Tasks', '>Hours', 'Status', 'People Ops note', '>'], j.rows.map(function (r, i) {
           var hrs = r.tasks.reduce(function (s, t) { return s + (Number(t.hours) || 0); }, 0);
@@ -584,6 +620,23 @@
       $$('[data-csv]', el).forEach(function (b) {
         b.onclick = function () { var r = j.rows[Number(b.getAttribute('data-csv'))]; downloadText(reportFileName(r), reportCsv(r)); };
       });
+      function gate() {
+        var ws = $('#wr-start', el).value, box = $('#wr-gate', el), btn = $('#wr-submit', el);
+        var ex = excuses.filter(function (x) { return x.week_start === ws && !x.used_at; })[0];
+        var html = '', allow = true;
+        if (reportLocked(ws) && !submitted(ws)) {
+          if (ex && ex.status === 'valid') html = '<div class="remind ok"><span class="tag">Accepted</span><span>People Ops accepted your reason for being late. You can submit this report now.</span></div>';
+          else {
+            allow = false;
+            if (ex && ex.status === 'pending') html = '<div class="remind warn"><span class="tag">Closed</span><span>This week closed on Friday at 6pm. Your reason has been sent to People Ops. You’ll get an email once they decide.</span></div>';
+            else if (ex && ex.status === 'invalid') html = '<div class="remind bad"><span class="tag">Closed</span><span>People Ops did not accept your reason, so this week stays closed.' + (ex.hr_note ? ' Note: ' + esc(ex.hr_note) : '') + '</span></div>';
+            else html = '<div class="remind bad"><span class="tag">Closed</span><span>Reports for this week closed on Friday ' + esc(fmtDate(reportFriday(ws))) + ' at 6pm.</span><button class="btn sm" id="wr-late" type="button">Tell People Ops why it’s late</button></div>';
+          }
+        }
+        box.innerHTML = html; btn.disabled = !allow; btn.style.display = allow ? '' : 'none';
+        var lb = $('#wr-late', el); if (lb) lb.onclick = function () { lateExcuseModal(ws, $('#wr-end', el).value, renderShell); };
+      }
+      $('#wr-start', el).addEventListener('change', gate); gate();
       $('#wr', el).onsubmit = function (e) {
         e.preventDefault();
         var d = formObj(this);
@@ -596,7 +649,7 @@
         var btn = this.querySelector('[type=submit]');
         busy(btn, true, 'Submitting…');
         api('emp.submitReport', d).then(function () { toast('Weekly report submitted.'); renderShell(); })
-          .catch(function (x) { $('#wr-error').textContent = x.message; busy(btn, false); });
+          .catch(function (x) { busy(btn, false); if (x.code === 'late') { gate(); if (!$('#wr-late', el)) $('#wr-error').textContent = x.message; } else $('#wr-error').textContent = x.message; });
       };
     });
   };
@@ -1184,18 +1237,40 @@
   /* ---- Weekly reports ---- */
   ADM.reports = function (el) {
     var st = sessionStorage.getItem('dp_rep_status') || 'submitted';
-    return api('adm.reports', { status: st === 'all' ? '' : st }).then(function (j) {
-      el.innerHTML = head('Weekly reports', 'Approve reports or send them back with a note.') +
+    return Promise.all([api('adm.reports', { status: st === 'all' ? '' : st }), api('adm.lateExcuses')]).then(function (res) {
+      var j = res[0], lx = res[1].rows || [];
+      var pendingLx = lx.filter(function (x) { return x.status === 'pending'; });
+      var lxShown = pendingLx.concat(lx.filter(function (x) { return x.status !== 'pending'; }).slice(0, 8));
+      el.innerHTML = head('Weekly reports', 'Approve reports or send them back with a note. Reports are due Friday by 5pm and close at 6pm.') +
+        (lxShown.length ? '<div class="panel"><div class="panel-head"><h2>Late report explanations' + (pendingLx.length ? ' <span class="pill warn">' + pendingLx.length + ' to review</span>' : '') + '</h2></div>' +
+          '<p class="small muted">Employees who missed the Friday 6pm cutoff explain why here. Mark the reason valid to let them submit that week’s report.</p>' +
+          table(['Employee', 'Week', 'Reason', 'Sent', 'Decision', '>'], lxShown.map(function (x, i) {
+            return '<tr><td><b>' + esc(x.name) + '</b></td><td>' + esc(fmtDate(x.week_start)) + '</td><td class="small" style="max-width:340px">' + esc(x.reason) + '</td><td>' + esc(fmtDate(String(x.created_at).slice(0, 10))) + '</td><td>' +
+              (x.used_at ? pill('approved', 'Valid · report in') : pill(x.status)) + (x.hr_note ? '<div class="small muted">' + esc(x.hr_note) + '</div>' : '') + '</td>' +
+              '<td><div class="actions">' + (x.status === 'pending' ? '<button class="btn sm" data-lx="' + i + '" type="button">Review</button>' : '') + '</div></td></tr>';
+          }), '') + '</div>' : '') +
         '<div class="seg">' + [['submitted', 'To review'], ['approved', 'Approved'], ['changes_requested', 'Changes requested'], ['all', 'All']].map(function (f) {
           return '<button type="button" data-s="' + f[0] + '" class="' + (st === f[0] ? 'on' : '') + '">' + f[1] + '</button>';
         }).join('') + '</div>' +
         table(['Employee', 'Week', 'Client', '>Tasks', '>Hours', 'Blockers', 'Status', '>'], j.rows.map(function (r, i) {
           var hrs = r.tasks.reduce(function (s, t) { return s + (Number(t.hours) || 0); }, 0);
           return '<tr><td><b>' + esc(r.name) + '</b></td><td>' + esc(fmtDate(r.week_start)) + ' – ' + esc(fmtDate(r.week_end)) + '<div class="small muted">Submitted ' + esc(fmtDate(r.submitted_on)) + '</div></td><td>' + esc(r.client_name) +
-            '</td><td class="r">' + r.tasks.length + '</td><td class="r">' + hrs + '</td><td>' + (r.blockers.length ? '<span class="pill warn">' + r.blockers.length + '</span>' : '—') + '</td><td>' + pill(r.status) +
+            '</td><td class="r">' + r.tasks.length + '</td><td class="r">' + hrs + '</td><td>' + (r.blockers.length ? '<span class="pill warn">' + r.blockers.length + '</span>' : '—') + '</td><td>' + pill(r.status) + (r.late ? ' <span class="pill bad">Late</span>' : '') +
             '</td><td><div class="actions"><button class="btn sm" data-r="' + i + '" type="button">Open</button></div></td></tr>';
         }), 'No reports here.');
       $$('[data-s]', el).forEach(function (b) { b.onclick = function () { sessionStorage.setItem('dp_rep_status', b.getAttribute('data-s')); renderShell(); }; });
+      $$('[data-lx]', el).forEach(function (b) {
+        b.onclick = function () {
+          var x = lxShown[Number(b.getAttribute('data-lx'))];
+          var m = openModal({ title: 'Late report · ' + x.name,
+            body: '<p><b>Week of ' + esc(fmtDate(x.week_start)) + '</b> (closed Friday 6pm)</p><div class="panel" style="white-space:pre-wrap">' + esc(x.reason) + '</div>' +
+              '<label class="field">Note to the employee (optional)<textarea id="lx-note"></textarea></label><p class="error" id="lx-err"></p>',
+            foot: '<button class="btn danger" data-v="invalid" type="button">Not valid</button><button class="btn ok" data-v="valid" type="button">Valid: let them submit</button>' });
+          $$('[data-v]', m).forEach(function (d) {
+            d.onclick = function () { busy(d, true); api('adm.reviewLate', { id: x.id, status: d.getAttribute('data-v'), hr_note: $('#lx-note', m).value }).then(after('Decision saved. The employee has been emailed.')).catch(errIn(m, '#lx-err')); };
+          });
+        };
+      });
       $$('[data-r]', el).forEach(function (b) {
         b.onclick = function () {
           var r = j.rows[Number(b.getAttribute('data-r'))];

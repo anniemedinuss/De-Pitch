@@ -24,8 +24,8 @@ const ALLOWED_MIME = {
 };
 
 /* ================= helpers ================= */
-class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
-const fail = (status, message) => { throw new HttpError(status, message); };
+class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
+const fail = (status, message, code) => { throw new HttpError(status, message, code); };
 const nowIso = () => new Date().toISOString();
 const today = () => nowIso().slice(0, 10);
 
@@ -170,7 +170,7 @@ export default async function handler(req, res) {
   } catch (err) {
     const status = err.status || 500;
     if (status >= 500) console.error(err);
-    return send(res, status, { error: status >= 500 && !err.status ? 'Something went wrong. Please try again.' : err.message });
+    return send(res, status, { error: status >= 500 && !err.status ? 'Something went wrong. Please try again.' : err.message, ...(err.code ? { code: err.code } : {}) });
   }
 }
 
@@ -278,7 +278,22 @@ async function empPayslip(u, b) {
 
 async function empReports(u) {
   const rows = await query(`SELECT * FROM reports WHERE user_id = $1 ORDER BY week_start DESC, id DESC LIMIT 100`, [u.id]);
-  return { rows: rows.map((r) => ({ ...r, tasks: json(r.tasks), blockers: json(r.blockers) })) };
+  const excuses = await query(`SELECT id, week_start, week_end, reason, status, hr_note, created_at, reviewed_at, used_at FROM late_reports WHERE user_id = $1 ORDER BY id DESC LIMIT 30`, [u.id]);
+  return { rows: rows.map((r) => ({ ...r, tasks: json(r.tasks), blockers: json(r.blockers) })), excuses, deadline: { due_hour: REPORT_DUE_HOUR, lock_hour: REPORT_LOCK_HOUR, week_start: currentWeekStart() } };
+}
+
+async function empLateExcuse(u, b) {
+  const ws = date(b.week_start, 'Week start date');
+  const we = date(b.week_end, 'Week end date', true) || reportFriday(ws);
+  const reason = req(b.reason, 'Your reason', 2000);
+  if (Date.now() <= reportLockTime(ws)) fail(400, 'This week is still open. You can submit your report as normal.');
+  if (await one(`SELECT id FROM reports WHERE user_id=$1 AND week_start=$2`, [u.id, ws])) fail(400, 'You have already submitted a report for this week.');
+  const open = await one(`SELECT id, status FROM late_reports WHERE user_id=$1 AND week_start=$2 AND used_at='' AND status IN ('pending','valid') ORDER BY id DESC LIMIT 1`, [u.id, ws]);
+  if (open && open.status === 'valid') fail(400, 'People Ops has already accepted your reason. You can submit the report now.');
+  if (open) await query(`UPDATE late_reports SET reason=$1, week_end=$2, created_at=$3 WHERE id=$4`, [reason, we, nowIso(), open.id]);
+  else await query(`INSERT INTO late_reports (user_id, week_start, week_end, reason, created_at) VALUES ($1,$2,$3,$4,$5)`, [u.id, ws, we, reason, nowIso()]);
+  await notifyHR(`Late weekly report: ${u.name} explained why`, { Employee: u.name, Week: `${ws} to ${we}`, Reason: reason, Review: 'Open the portal → Weekly reports → Late report explanations to mark it valid or not valid.' });
+  return { ok: true };
 }
 
 function cleanReport(b) {
@@ -295,16 +310,34 @@ function cleanReport(b) {
   return { ws, we, tasks, blockers };
 }
 
+/* ---- Weekly report deadline ----
+   Reports are due Friday by 5pm (Lagos) and lock at 6pm. After that, the employee
+   explains why it is late; if People Ops accepts the reason, they can submit it. */
+const REPORT_DUE_HOUR = 17;
+const REPORT_LOCK_HOUR = 18;
+function addDaysIso(d, n) { const t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
+function reportFriday(ws) { const dow = new Date(ws + 'T00:00:00Z').getUTCDay(); return addDaysIso(ws, dow <= 5 ? 5 - dow : 6); }
+function reportLockTime(ws) { return Date.parse(`${reportFriday(ws)}T${String(REPORT_LOCK_HOUR).padStart(2, '0')}:00:00+01:00`); }
+function lagosNow() { return new Date(Date.now() + 3600000); } // read with getUTC* for Lagos wall time
+function currentWeekStart() { const n = lagosNow(); const d = n.toISOString().slice(0, 10); return addDaysIso(d, -((n.getUTCDay() + 6) % 7)); }
+
 async function empSubmitReport(u, b) {
   const { ws, we, tasks, blockers } = cleanReport(b);
+  let late = false, excuse = null;
+  if (Date.now() > reportLockTime(ws)) {
+    excuse = await one(`SELECT id FROM late_reports WHERE user_id=$1 AND week_start=$2 AND status='valid' AND used_at='' ORDER BY id DESC LIMIT 1`, [u.id, ws]);
+    if (!excuse) fail(403, `Reports for this week closed on Friday ${new Date(reportFriday(ws) + 'T12:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })} at 6pm. Tell People Ops why it's late. If they accept your reason, you can submit it.`, 'late');
+    late = true;
+  }
   const client = str(b.client_name, 160) || u.client_name || '';
   const row = await one(
-    `INSERT INTO reports (user_id, client_name, week_start, week_end, submitted_on, tasks, blockers, status, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'submitted',$8) RETURNING id`,
-    [u.id, client, ws, we, today(), JSON.stringify(tasks), JSON.stringify(blockers), nowIso()]
+    `INSERT INTO reports (user_id, client_name, week_start, week_end, submitted_on, tasks, blockers, status, created_at, late)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'submitted',$8,$9) RETURNING id`,
+    [u.id, client, ws, we, today(), JSON.stringify(tasks), JSON.stringify(blockers), nowIso(), late]
   );
+  if (excuse) await query(`UPDATE late_reports SET used_at=$1 WHERE id=$2`, [nowIso(), excuse.id]);
   const hours = tasks.reduce((t, x) => t + x.hours, 0);
-  await notifyHR(`Weekly report from ${u.name}`, { Employee: u.name, Client: client, Week: `${ws} to ${we}`, Tasks: tasks.length, Hours: hours, Blockers: blockers.length });
+  await notifyHR(`${late ? 'Late weekly report' : 'Weekly report'} from ${u.name}`, { Employee: u.name, Client: client, Week: `${ws} to ${we}`, Tasks: tasks.length, Hours: hours, Blockers: blockers.length });
   return { id: row.id };
 }
 
@@ -438,7 +471,7 @@ async function cliDocuments(u) {
 /* ================= admin (People Ops) ================= */
 async function admOverview() {
   const c = await one(`SELECT
-    (SELECT COUNT(*)::int FROM reports WHERE status = 'submitted') AS reports,
+    (SELECT COUNT(*)::int FROM reports WHERE status = 'submitted') + (SELECT COUNT(*)::int FROM late_reports WHERE status = 'pending') AS reports,
     (SELECT COUNT(*)::int FROM requests WHERE status = 'pending') AS requests,
     (SELECT COUNT(*)::int FROM recruitment WHERE status IN ('submitted','in_progress')) AS recruitment,
     (SELECT COUNT(*)::int FROM talent_feedback WHERE status = 'submitted') AS feedback,
@@ -600,6 +633,49 @@ async function admReports(admin, b) {
   const rows = await query(
     `SELECT r.*, u.name, u.email FROM reports r JOIN users u ON u.id = r.user_id ${status ? 'WHERE r.status = $1' : ''} ORDER BY r.id DESC LIMIT 300`, status ? [status] : []);
   return { rows: rows.map((r) => ({ ...r, tasks: json(r.tasks), blockers: json(r.blockers) })) };
+}
+
+async function admLateExcuses(admin, b) {
+  const rows = await query(`SELECT l.*, u.name, u.email FROM late_reports l JOIN users u ON u.id = l.user_id ORDER BY (l.status = 'pending') DESC, l.id DESC LIMIT 100`);
+  return { rows };
+}
+
+async function admReviewLate(admin, b) {
+  const status = ['valid', 'invalid'].includes(b.status) ? b.status : fail(400, 'Choose valid or not valid.');
+  const note = str(b.hr_note, 1000);
+  const row = await one(`UPDATE late_reports SET status=$1, hr_note=$2, reviewed_at=$3 WHERE id=$4 RETURNING *`, [status, note, nowIso(), int(b.id)]);
+  if (!row) fail(404, 'Not found.');
+  const u = await one(`SELECT name, email FROM users WHERE id=$1`, [row.user_id]);
+  if (u && u.email) {
+    const first = escapeHtml(String(u.name || '').split(' ')[0] || 'there');
+    const week = `${row.week_start} to ${row.week_end}`;
+    const body = status === 'valid'
+      ? `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">People Ops has accepted your reason for the late weekly report (${week}). You can now submit it in the portal under <b>Weekly reports</b>.</p>`
+      : `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">People Ops reviewed your reason for the late weekly report (${week}) and did not accept it, so this week's report stays closed.</p>`;
+    await sendEmail({ to: u.email, subject: status === 'valid' ? 'You can now submit your late weekly report' : 'Your late weekly report', html: layout(status === 'valid' ? 'Reason accepted' : 'Reason not accepted', body + (note ? `<p style="font-size:15px;line-height:1.6"><b>Note from People Ops:</b> ${escapeHtml(note)}</p>` : '') + `<p><a href="${assetBase()}/portal#/reports" style="display:inline-block;background:#011D38;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Open the portal</a></p>`), replyTo: ADMIN_EMAIL });
+  }
+  return { ok: true };
+}
+
+/* Friday reminder: emails every active employee who has not yet sent this week's report.
+   Runs from the daily sweep, once per Friday (Lagos time), between 9am and 5pm. */
+async function sweepReportReminders() {
+  const n = lagosNow();
+  if (n.getUTCDay() !== 5 || n.getUTCHours() < 9 || n.getUTCHours() >= REPORT_DUE_HOUR) return 0;
+  const ws = currentWeekStart();
+  const key = `report-reminder:${ws}`;
+  const claimed = await one(`INSERT INTO reminders (key, sent_at) VALUES ($1,$2) ON CONFLICT (key) DO NOTHING RETURNING key`, [key, nowIso()]);
+  if (!claimed) return 0;
+  const due = await query(`SELECT id, name, email FROM users u WHERE role='employee' AND active=TRUE AND NOT EXISTS (SELECT 1 FROM reports r WHERE r.user_id=u.id AND r.week_start=$1)`, [ws]);
+  let sent = 0;
+  for (const u of due) {
+    const first = escapeHtml(String(u.name || '').split(' ')[0] || 'there');
+    const ok = await sendEmail({ to: u.email, subject: 'Reminder: your weekly report is due today by 5pm', replyTo: ADMIN_EMAIL,
+      html: layout('Your weekly report is due today', `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">Friendly reminder: please submit this week's report on the Dé Pitch portal <b>by 5pm today</b>. The form closes at <b>6pm</b>. After that you'll need to explain to People Ops why it's late.</p><p><a href="${assetBase()}/portal#/reports" style="display:inline-block;background:#011D38;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Submit my weekly report</a></p>`) });
+    if (ok) sent++;
+  }
+  await query(`UPDATE reminders SET sent_count=$1 WHERE key=$2`, [sent, key]);
+  return sent;
 }
 
 async function admReviewReport(admin, b) {
@@ -1083,6 +1159,7 @@ async function sweepChats() {
     n++;
   }
   n += await sweepFollowUps();
+  n += await sweepReportReminders();
   return n;
 }
 
@@ -1847,7 +1924,7 @@ const ACTIONS = {
   'mkt.posts': mktPosts, 'mkt.post': mktPost, 'mkt.savePost': mktSavePost, 'mkt.deletePost': mktDeletePost, 'mkt.previewPost': mktPreviewPost,
   'mkt.audienceCount': mktAudienceCount, 'mkt.sendTest': mktSendTest, 'mkt.send': mktSend, 'mkt.uploadImage': mktUploadImage, 'mkt.images': mktImages,
   'emp.dashboard': empDashboard, 'emp.payroll': empPayroll, 'emp.payslip': empPayslip,
-  'emp.reports': empReports, 'emp.submitReport': empSubmitReport,
+  'emp.reports': empReports, 'emp.submitReport': empSubmitReport, 'emp.lateExcuse': empLateExcuse,
   'emp.requests': empRequests, 'emp.submitRequest': empSubmitRequest, 'emp.documents': empDocuments,
 
   'cli.dashboard': cliDashboard, 'cli.invoice': cliInvoice,
@@ -1858,7 +1935,7 @@ const ACTIONS = {
   'adm.resetPassword': admResetPassword, 'adm.clients': admClients, 'adm.saveClient': admSaveClient,
   'adm.payroll': admPayroll, 'adm.generatePayroll': admGeneratePayroll, 'adm.savePayroll': admSavePayroll,
   'adm.markPaid': admMarkPaid, 'adm.deletePayroll': admDeletePayroll, 'adm.payslip': admEmployeePayslip,
-  'adm.reports': admReports, 'adm.reviewReport': admReviewReport, 'adm.importReports': admImportReports,
+  'adm.reports': admReports, 'adm.reviewReport': admReviewReport, 'adm.importReports': admImportReports, 'adm.lateExcuses': admLateExcuses, 'adm.reviewLate': admReviewLate,
   'adm.requests': admRequests, 'adm.reviewRequest': admReviewRequest,
   'adm.invoices': admInvoices, 'adm.invoice': admInvoice, 'adm.draftInvoice': admDraftInvoice, 'adm.saveInvoice': admSaveInvoice,
   'adm.invoiceStatus': admInvoiceStatus, 'adm.deleteInvoice': admDeleteInvoice,

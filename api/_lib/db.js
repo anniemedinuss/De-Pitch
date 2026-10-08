@@ -334,6 +334,11 @@ const SCHEMA = [
     faq TEXT DEFAULT '[]', bridge TEXT DEFAULT '', cta TEXT DEFAULT 'consultation', cta_label TEXT DEFAULT '',
     seo_title TEXT DEFAULT '', seo_description TEXT DEFAULT '', status TEXT DEFAULT 'draft', views INTEGER DEFAULT 0,
     published_at TEXT DEFAULT '', created_by INTEGER, created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`,
+  `ALTER TABLE reports ADD COLUMN IF NOT EXISTS late BOOLEAN DEFAULT FALSE`,
+  `CREATE TABLE IF NOT EXISTS late_reports (
+    id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL, week_start TEXT DEFAULT '', week_end TEXT DEFAULT '', reason TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending', hr_note TEXT DEFAULT '', created_at TEXT DEFAULT '', reviewed_at TEXT DEFAULT '', used_at TEXT DEFAULT '')`,
+  `CREATE TABLE IF NOT EXISTS reminders (key TEXT PRIMARY KEY, sent_at TEXT DEFAULT '', sent_count INTEGER DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS payroll_user_idx ON payroll (user_id)`,
   `CREATE INDEX IF NOT EXISTS reports_user_idx ON reports (user_id)`,
   `CREATE INDEX IF NOT EXISTS requests_user_idx ON requests (user_id)`,

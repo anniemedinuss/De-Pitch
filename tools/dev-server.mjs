@@ -40,6 +40,11 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/portal') return handler(req, res);
+  // Same rewrites as vercel.json
+  let m;
+  if (url.pathname === '/scoop' || url.pathname === '/scoop.html') { req.url = '/api/portal?blog=_index' + (url.search ? '&' + url.search.slice(1) : ''); return handler(req, res); }
+  if ((m = url.pathname.match(/^\/scoop\/([^/]+)$/))) { req.url = '/api/portal?blog=' + m[1]; return handler(req, res); }
+  if (url.pathname === '/sitemap.xml') { req.url = '/api/portal?sitemap=1'; return handler(req, res); }
   let p = decodeURIComponent(url.pathname);
   if (p === '/') p = '/index.html';
   if (!path.extname(p)) p += '.html'; // mimic Vercel cleanUrls

@@ -312,7 +312,7 @@
     admin: [['inbox', 'Inbox', 'inbox'], ['chat', 'Live chat', 'chats'], ['services', 'Services', 'services'], ['enquiries', 'Website enquiries', 'enquiries'], ['people', 'People'], ['clients', 'Clients'], ['payroll', 'Payroll', 'payroll_pending'], ['invoices', 'Invoices', 'invoices_draft'],
       ['reports', 'Weekly reports', 'reports'], ['requests', 'Requests', 'requests'], ['recruitment', 'Talent requests', 'recruitment'],
       ['feedback', 'Reviews & removals', 'feedback'], ['referrals', 'Referrals', 'referrals'], ['points', 'Points & rewards', 'points'], ['documents', 'Documents'], ['announcements', 'Announcements'], ['campaigns', 'Email campaigns'], ['audience', 'Email audience']],
-    media: [['campaigns', 'Email campaigns'], ['audience', 'Audience']]
+    media: [['blog', 'Blog'], ['campaigns', 'Email campaigns'], ['audience', 'Audience']]
   };
   var ROLE_LABEL = { employee: 'Employee', client: 'Client', admin: 'People Ops', media: 'Media' };
 
@@ -350,6 +350,7 @@
       if (!a) return;
       this.classList.remove('open');
       if (a.getAttribute('href') === '#/campaigns') sessionStorage.removeItem('dp_mkt_edit');
+      if (a.getAttribute('href') === '#/blog') sessionStorage.removeItem('dp_blog_edit');
       if (a.getAttribute('href') === '#/' + tab) { e.preventDefault(); renderShell(); }
     });
     var fn = VIEWS[S.user.role][tab];
@@ -1950,11 +1951,11 @@
     });
   }
   // Show the email at its real width (640px desktop, 375px mobile), scaled to fit the preview column.
-  function fitFrame(frame) {
+  function fitFrame(frame, desktopW) {
     var wrap = frame.parentNode;
     function fit() {
       if (!document.body.contains(frame)) { window.removeEventListener('resize', fit); return; }
-      var w = wrap.classList.contains('mobile') ? 375 : 640, avail = wrap.clientWidth - 20, k = Math.min(1, avail / w), h = Math.max(520, window.innerHeight - 130);
+      var w = wrap.classList.contains('mobile') ? 375 : (desktopW || 640), avail = wrap.clientWidth - 20, k = Math.min(1, avail / w), h = Math.max(520, window.innerHeight - 130);
       frame.style.width = w + 'px'; frame.style.height = (h / k) + 'px'; frame.style.transform = 'scale(' + k + ')'; frame.style.transformOrigin = '0 0';
       wrap.style.height = (h + 20) + 'px'; frame.style.marginLeft = Math.max(0, (avail - w * k) / 2) + 'px';
     }
@@ -2075,6 +2076,156 @@
       api('mkt.importContacts', { rows: rows.map(function (r) { return Object.assign({}, r, { tags: extra ? r.tags + ',' + extra : r.tags }); }) })
         .then(function (r) { after(r.added + ' added, ' + r.updated + ' updated' + (r.skipped ? ', ' + r.skipped + ' skipped (no valid email)' : '') + '.')(); }).catch(errIn(m, '#im-err'));
     };
+  }
+
+  /* ================= the Scoop: blog editor (relations account) ================= */
+  var BRIDGES = {
+    consultation: 'Every career needs a different next move, and yours depends on where you are and where you want to go. That is what we work through, one to one, in a free consultation.',
+    cv: 'Every CV needs a different fix, and yours depends on your field and the roles you’re targeting. That’s what we work through in a free consultation, and in a full CV revamp.',
+    interview: 'Every interview is different, and so is the way you tell your story. That’s exactly what we rehearse together in interview prep.',
+    recruitment: 'Every role needs a different search, and the right hire depends on your team, your budget and your culture. That’s what we work out with you before we shortlist anyone.',
+    hcm: 'Every team has its own people problems, and the fix depends on how you work. That’s what we map out with you in a human capital consultation.',
+    contact: 'Have a question about your next move? Talk to us.'
+  };
+  MKT.blog = function (el) {
+    var editing = sessionStorage.getItem('dp_blog_edit');
+    if (editing) return blogEditor(el, editing === 'new' ? null : Number(editing));
+    return api('mkt.posts').then(function (j) {
+      var cat = {}; j.categories.forEach(function (c) { cat[c.key] = c.label; });
+      el.innerHTML = head('The Scoop', 'Write, edit and publish stories on depitchhq.com/scoop. Each one ends with a bridge to a service.', '<a class="btn secondary" href="' + esc(j.base) + '/scoop" target="_blank" rel="noopener">View the blog</a><button class="btn" id="bl-new" type="button">+ New story</button>') +
+        table(['Story', 'Topic', 'Status', '>Views', 'Date', '>'], j.rows.map(function (r) {
+          return '<tr><td><div class="row" style="flex-wrap:nowrap"><img src="' + esc(imgSrc(r.cover)) + '" alt="" style="width:52px;height:40px;object-fit:cover;border-radius:6px;flex:none"><div><b>' + esc(r.title || 'Untitled') + '</b><div class="small muted">/scoop/' + esc(r.slug) + '</div></div></div></td><td>' + esc(cat[r.category] || r.category) + '</td><td>' +
+            (r.status === 'published' ? '<span class="pill ok">Published</span>' : '<span class="pill mute">Draft</span>') + '</td><td class="r">' + (r.views || 0) + '</td><td>' + esc(fmtDate(r.published_at || r.updated_at)) + '</td><td><div class="actions">' +
+            '<button class="btn sm" data-ed="' + r.id + '" type="button">Edit</button>' + (r.status === 'published' ? '<a class="btn sm secondary" href="' + esc(j.base) + '/scoop/' + esc(r.slug) + '" target="_blank" rel="noopener">View</a>' : '') +
+            '<button class="btn sm secondary" data-del="' + r.id + '" data-t="' + esc(r.title) + '" type="button">Delete</button></div></td></tr>';
+        }), 'No stories yet. Start one with "+ New story".');
+      $('#bl-new', el).onclick = function () { sessionStorage.setItem('dp_blog_edit', 'new'); renderShell(); };
+      $$('[data-ed]', el).forEach(function (b) { b.onclick = function () { sessionStorage.setItem('dp_blog_edit', b.getAttribute('data-ed')); renderShell(); }; });
+      $$('[data-del]', el).forEach(function (b) {
+        b.onclick = function () { if (window.confirm('Delete "' + b.getAttribute('data-t') + '"? This removes it from the website too.')) api('mkt.deletePost', { id: Number(b.getAttribute('data-del')) }).then(function () { toast('Deleted.'); renderShell(); }); };
+      });
+    });
+  };
+
+  function blogEditor(el, id) {
+    return Promise.all([api('mkt.posts'), id ? api('mkt.post', { id: id }) : Promise.resolve(null), mktMeta(), api('mkt.images')]).then(function (res) {
+      var meta = res[0], p = res[1] ? res[1].post : { title: '', slug: '', excerpt: '', body: '', cover: 'planning', cover_alt: '', category: 'signs', author: S.user.name || 'Dé Pitch', author_role: '', faq: [], bridge: BRIDGES.consultation, cta: 'consultation', cta_label: '', seo_title: '', seo_description: '', status: 'draft' };
+      var images = res[2].images, uploads = res[3].rows, slugTouched = !!p.slug;
+      var imgOpts = function (v) {
+        return images.map(function (im) { return '<option value="' + im.key + '"' + (v === im.key ? ' selected' : '') + '>' + esc(im.label) + '</option>'; }).join('') +
+          uploads.map(function (u) { var k = 'file:' + u.id; return '<option value="' + k + '"' + (v === k ? ' selected' : '') + '>Uploaded: ' + esc(u.filename) + '</option>'; }).join('') + '<option value="__upload">Upload a new photo…</option>';
+      };
+      var faqRow = function (x) { return '<div class="faq-row"><input class="input" data-fq placeholder="Question people ask" value="' + esc(x.q || '') + '"><textarea class="input" data-fa rows="2" placeholder="Short answer (2 to 3 sentences)">' + esc(x.a || '') + '</textarea><button class="btn sm secondary" type="button" data-fdel>Remove</button></div>'; };
+      el.innerHTML = head(p.id ? 'Edit story' : 'New story', p.status === 'published' ? 'Published. Changes go live when you click Update.' : 'Draft. Only you can see it until you publish.',
+          '<button class="btn secondary" id="bl-back" type="button">Back</button>' + (p.status === 'published' ? '<a class="btn secondary" target="_blank" rel="noopener" href="' + esc(meta.base) + '/scoop/' + esc(p.slug) + '">View live</a>' : '')) +
+        '<div class="mkt-grid"><div class="stack">' +
+        '<div class="panel stack"><div class="section-label">1. The story</div>' +
+        '<label class="field">Title<input id="bl-title" value="' + esc(p.title) + '" placeholder="e.g. 7 signs your CV is the reason you’re not getting interviews"></label>' +
+        '<label class="field">Summary<textarea id="bl-excerpt" rows="2" placeholder="One or two sentences. Shows under the title, in the blog list and on Google.">' + esc(p.excerpt) + '</textarea></label>' +
+        '<div class="grid-2"><label class="field">Topic<select id="bl-cat">' + meta.categories.map(function (c) { return '<option value="' + c.key + '"' + (p.category === c.key ? ' selected' : '') + '>' + esc(c.label) + '</option>'; }).join('') + '</select></label>' +
+        '<div class="field img-field"><span>Cover photo</span><div class="img-row"><img src="' + esc(imgSrc(p.cover)) + '" alt="" id="bl-cover-th"><select id="bl-cover">' + imgOpts(p.cover) + '</select></div></div></div>' +
+        '<label class="field">Describe the cover photo (for Google and screen readers)<input id="bl-alt" value="' + esc(p.cover_alt) + '" placeholder="e.g. Woman reviewing her CV on a laptop"></label>' +
+        '<div class="grid-2"><label class="field">Author<input id="bl-author" value="' + esc(p.author) + '"></label><label class="field">Author role<input id="bl-role" value="' + esc(p.author_role) + '" placeholder="e.g. Co-founder, Dé Pitch"></label></div></div>' +
+        '<div class="panel stack"><div class="section-label">2. Write</div>' +
+        '<div class="md-bar"><button type="button" data-md="h2">Heading</button><button type="button" data-md="h3">Small heading</button><button type="button" data-md="b"><b>B</b></button><button type="button" data-md="i"><i>I</i></button><button type="button" data-md="link">Link</button><button type="button" data-md="ul">• List</button><button type="button" data-md="ol">1. List</button><button type="button" data-md="quote">“ Quote</button><button type="button" data-md="img">Photo</button></div>' +
+        '<textarea id="bl-body" rows="22" class="md-area" placeholder="Start writing. Leave an empty line between paragraphs.">' + esc(p.body) + '</textarea>' +
+        '<p class="small muted">Tips: open with the answer in the first two sentences. Use headings that sound like questions people ask. Explain the why, keep the how for the consultation. <span id="bl-words"></span></p></div>' +
+        '<div class="panel stack"><div class="section-label">3. Bridge to a service</div>' +
+        '<label class="field">Closing line (not a summary: why they need us for their own case)<textarea id="bl-bridge" rows="3">' + esc(p.bridge) + '</textarea></label>' +
+        '<div class="grid-2"><label class="field">Button goes to<select id="bl-cta">' + meta.ctas.map(function (c) { return '<option value="' + c.key + '"' + (p.cta === c.key ? ' selected' : '') + '>' + esc(c.label) + '</option>'; }).join('') + '</select></label>' +
+        '<label class="field">Button text (optional)<input id="bl-ctalabel" value="' + esc(p.cta_label) + '" placeholder="Uses the default if empty"></label></div>' +
+        '<button class="btn sm secondary" id="bl-suggest" type="button" style="justify-self:start">Use the suggested line for this service</button></div>' +
+        '<div class="panel stack"><div class="section-label">4. Questions people ask (optional, helps Google and AI search)</div><div id="bl-faq">' + (p.faq || []).map(faqRow).join('') + '</div>' +
+        '<button class="btn sm secondary" id="bl-faq-add" type="button" style="justify-self:start">+ Add a question</button></div>' +
+        '<div class="panel stack"><div class="section-label">5. Google</div>' +
+        '<label class="field">Web address<div class="row" style="flex-wrap:nowrap;gap:4px"><span class="small muted">/scoop/</span><input id="bl-slug" value="' + esc(p.slug) + '" style="flex:1"></div></label>' +
+        '<label class="field">Google title (optional) <span class="small muted" id="bl-st-n"></span><input id="bl-st" value="' + esc(p.seo_title) + '" placeholder="Uses the title if empty"></label>' +
+        '<label class="field">Google description (optional) <span class="small muted" id="bl-sd-n"></span><textarea id="bl-sd" rows="2" placeholder="Uses the summary if empty">' + esc(p.seo_description) + '</textarea></label>' +
+        '<div class="serp"><div class="serp-url">depitchhq.com › scoop › <span id="serp-slug"></span></div><div class="serp-title" id="serp-title"></div><div class="serp-desc" id="serp-desc"></div></div></div>' +
+        '<div class="panel row"><button class="btn secondary" id="bl-save" type="button">' + (p.status === 'published' ? 'Save as draft (unpublish)' : 'Save draft') + '</button><button class="btn ok" id="bl-pub" type="button" style="margin-left:auto">' + (p.status === 'published' ? 'Update' : 'Publish') + '</button></div>' +
+        '<p class="error" id="bl-err"></p><input type="file" id="bl-upload" accept="image/png,image/jpeg,image/webp" hidden></div>' +
+        '<div class="mkt-preview"><div class="seg" id="bl-view"><button type="button" data-w="desktop" class="on">Desktop</button><button type="button" data-w="mobile">Mobile</button></div><div class="frame-wrap"><iframe id="bl-frame" title="Story preview"></iframe></div></div></div>';
+
+      var body = $('#bl-body', el), frame = $('#bl-frame', el), timer = null, uploadFor = null;
+      fitFrame(frame, 1180);
+      function faqs() { return $$('.faq-row', el).map(function (r) { return { q: $('[data-fq]', r).value, a: $('[data-fa]', r).value }; }).filter(function (x) { return x.q.trim() && x.a.trim(); }); }
+      function data(status) {
+        return { id: p.id, title: $('#bl-title', el).value, slug: $('#bl-slug', el).value, excerpt: $('#bl-excerpt', el).value, body: body.value, cover: $('#bl-cover', el).value, cover_alt: $('#bl-alt', el).value,
+          category: $('#bl-cat', el).value, author: $('#bl-author', el).value, author_role: $('#bl-role', el).value, faq: faqs(), bridge: $('#bl-bridge', el).value, cta: $('#bl-cta', el).value,
+          cta_label: $('#bl-ctalabel', el).value, seo_title: $('#bl-st', el).value, seo_description: $('#bl-sd', el).value, status: status };
+      }
+      function serp() {
+        var t = $('#bl-st', el).value || $('#bl-title', el).value, d = $('#bl-sd', el).value || $('#bl-excerpt', el).value;
+        $('#serp-title', el).textContent = (t || 'Your title') + ' | Dé Pitch'; $('#serp-desc', el).textContent = d || 'Your summary shows here.';
+        $('#serp-slug', el).textContent = $('#bl-slug', el).value || '…';
+        $('#bl-st-n', el).textContent = '(' + t.length + '/60)'; $('#bl-sd-n', el).textContent = '(' + d.length + '/155)';
+        var words = body.value.split(/\s+/).filter(Boolean).length; $('#bl-words', el).textContent = words + ' words · about ' + Math.max(1, Math.round(words / 220)) + ' min read.';
+      }
+      function preview() { clearTimeout(timer); timer = setTimeout(function () { api('mkt.previewPost', data()).then(function (r) { frame.srcdoc = r.html; }); }, 500); serp(); }
+      function slugify(s) { return String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/₦/g, 'n').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80); }
+      $('#bl-title', el).addEventListener('input', function () { if (!slugTouched) $('#bl-slug', el).value = slugify(this.value); });
+      $('#bl-slug', el).addEventListener('input', function () { slugTouched = true; });
+      $$('input, textarea, select', el).forEach(function (x) { if (x.id !== 'bl-upload' && x.id !== 'bl-cover') x.addEventListener(x.tagName === 'SELECT' ? 'change' : 'input', preview); });
+      $('#bl-cover', el).onchange = function () {
+        if (this.value === '__upload') { uploadFor = 'cover'; $('#bl-upload', el).click(); return; }
+        $('#bl-cover-th', el).src = imgSrc(this.value); preview();
+      };
+      $('#bl-upload', el).onchange = function () {
+        var input = this;
+        fileToPayload(input).then(function (file) { return api('mkt.uploadImage', { file: file }); }).then(function (r) {
+          uploads.unshift({ id: Number(r.key.slice(5)), filename: input.files[0].name }); input.value = '';
+          if (uploadFor === 'cover') { $('#bl-cover', el).innerHTML = imgOpts(r.key); $('#bl-cover-th', el).src = imgSrc(r.key); }
+          else { $('#bl-cover', el).innerHTML = imgOpts($('#bl-cover', el).value); insert('\n\n![' + 'Describe the photo' + '](' + r.key + ')\n\n', ''); }
+          toast('Photo uploaded.'); preview();
+        }).catch(function (x) { if (uploadFor === 'cover') $('#bl-cover', el).value = p.cover; toast(x.message, true); });
+      };
+      function insert(before, after, placeholder) {
+        var s = body.selectionStart, e = body.selectionEnd, sel = body.value.slice(s, e) || placeholder || '';
+        body.value = body.value.slice(0, s) + before + sel + (after || '') + body.value.slice(e);
+        body.focus(); body.selectionStart = s + before.length; body.selectionEnd = s + before.length + sel.length; preview();
+      }
+      function linePrefix(prefix, ph) {
+        var s = body.selectionStart, e = body.selectionEnd, start = body.value.lastIndexOf('\n', s - 1) + 1;
+        var sel = body.value.slice(start, e) || ph;
+        var out = sel.split('\n').map(function (l, i) { return (typeof prefix === 'function' ? prefix(i) : prefix) + l.replace(/^(#{2,3}\s|[-*]\s|\d+\.\s|>\s?)/, ''); }).join('\n');
+        var lead = start > 0 && body.value[start - 1] === '\n' && body.value[start - 2] !== '\n' ? '\n' : '';
+        body.value = body.value.slice(0, start) + lead + out + body.value.slice(Math.max(e, start + (body.value.slice(start, e) ? 0 : 0)));
+        body.focus(); preview();
+      }
+      $$('[data-md]', el).forEach(function (b) {
+        b.onclick = function () {
+          var k = b.getAttribute('data-md');
+          if (k === 'h2') linePrefix('## ', 'Heading');
+          else if (k === 'h3') linePrefix('### ', 'Small heading');
+          else if (k === 'b') insert('**', '**', 'bold text');
+          else if (k === 'i') insert('*', '*', 'italic text');
+          else if (k === 'link') { var u = window.prompt('Link address (e.g. https://www.depitchhq.com/cv-revamp or /cv-revamp)', '/'); if (u) insert('[', '](' + u.trim() + ')', 'link text'); }
+          else if (k === 'ul') linePrefix('- ', 'List item');
+          else if (k === 'ol') linePrefix(function (i) { return (i + 1) + '. '; }, 'List item');
+          else if (k === 'quote') linePrefix('> ', 'Quote');
+          else if (k === 'img') { uploadFor = 'body'; $('#bl-upload', el).click(); }
+        };
+      });
+      function bindFaq() { $$('[data-fdel]', el).forEach(function (b) { b.onclick = function () { b.parentNode.remove(); preview(); }; }); $$('.faq-row input, .faq-row textarea', el).forEach(function (x) { x.oninput = preview; }); }
+      $('#bl-faq-add', el).onclick = function () { $('#bl-faq', el).insertAdjacentHTML('beforeend', faqRow({})); bindFaq(); };
+      bindFaq();
+      $('#bl-suggest', el).onclick = function () { $('#bl-bridge', el).value = BRIDGES[$('#bl-cta', el).value] || ''; preview(); };
+      $$('[data-w]', $('#bl-view', el)).forEach(function (b) {
+        b.onclick = function () { $$('[data-w]', $('#bl-view', el)).forEach(function (x) { x.classList.toggle('on', x === b); }); $('.frame-wrap', el).classList.toggle('mobile', b.getAttribute('data-w') === 'mobile'); fitFrame(frame, 1180); };
+      });
+      function back() { sessionStorage.removeItem('dp_blog_edit'); renderShell(); }
+      $('#bl-back', el).onclick = back;
+      function save(btn, status, msg) {
+        busy(btn, true); $('#bl-err', el).textContent = '';
+        api('mkt.savePost', data(status)).then(function (r) {
+          p.id = r.id; p.status = r.status; p.slug = r.slug; sessionStorage.setItem('dp_blog_edit', r.id);
+          toast(msg); renderShell();
+        }).catch(function (x) { $('#bl-err', el).textContent = x.message; busy(btn, false); });
+      }
+      $('#bl-save', el).onclick = function () { save(this, 'draft', p.status === 'published' ? 'Unpublished. It is a draft again.' : 'Draft saved.'); };
+      $('#bl-pub', el).onclick = function () { if (p.status !== 'published' && !window.confirm('Publish this story on depitchhq.com/scoop?')) return; save(this, 'published', p.status === 'published' ? 'Updated. Live within a minute.' : 'Published. Live within a minute.'); };
+      preview();
+    });
   }
 
   ADM.campaigns = MKT.campaigns; ADM.audience = MKT.audience;

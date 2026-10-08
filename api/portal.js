@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { query, one } from './_lib/db.js';
 import { notify, sendEmail, sendBatch, layout, canEmailVisitors, escapeHtml, siteUrl } from './_lib/mail.js';
 import { TEMPLATES, IMAGE_LIBRARY, renderCampaign, templateById } from './_lib/campaign-templates.js';
+import { CATEGORIES, CTAS, slugify, renderIndex, renderPost, renderNotFound, renderSitemap } from './_lib/blog.js';
 import { pointsEmailHtml } from './_lib/points-email.js';
 import {
   hashPassword, verifyPassword, passwordProblem, tempPassword,
@@ -116,6 +117,7 @@ export default async function handler(req, res) {
     res.setHeader('Referrer-Policy', 'same-origin');
     const reqUrl = new URL(req.url, 'http://x');
     if (reqUrl.searchParams.get('review')) return await handleReview(req, res, reqUrl);
+    if (req.method === 'GET' && (reqUrl.searchParams.get('blog') || reqUrl.searchParams.get('sitemap') || /^\/scoop(\/|$)/.test(reqUrl.pathname))) return await handleBlog(req, res, reqUrl);
     if (reqUrl.searchParams.get('unsub') || reqUrl.searchParams.get('o') || reqUrl.searchParams.get('img')) return await handleMarketingGet(req, res, reqUrl);
 
     if (req.method === 'GET') {
@@ -1683,6 +1685,93 @@ async function handleMarketingGet(req, res, url) {
     <form method="POST" action="${self}"><div class="row"><button class="ch" type="submit">Unsubscribe</button></div></form>`);
 }
 
+
+/* ================= the Scoop (blog) ================= */
+const SITE_BASE = () => assetBase();
+const postOut = (p) => ({ ...p, faq: json(p.faq, []) });
+function htmlOut(res, status, html, cache) {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', cache || 'no-store');
+  res.end(html);
+}
+async function publishedPosts() {
+  return (await query(`SELECT * FROM posts WHERE status = 'published' ORDER BY published_at DESC, id DESC LIMIT 500`)).map(postOut);
+}
+async function handleBlog(req, res, url) {
+  const base = SITE_BASE();
+  if (url.searchParams.get('sitemap')) {
+    res.statusCode = 200; res.setHeader('Content-Type', 'application/xml; charset=utf-8'); res.setHeader('Cache-Control', 'public, s-maxage=600, stale-while-revalidate=86400');
+    return res.end(renderSitemap(base, await publishedPosts()));
+  }
+  let slug = url.searchParams.get('blog') || '';
+  if (!slug || slug === '_index') { const m = url.pathname.match(/^\/scoop\/([^/?#]+)/); slug = m ? decodeURIComponent(m[1]) : '_index'; }
+  const cache = 'public, s-maxage=60, stale-while-revalidate=600';
+  const posts = await publishedPosts();
+  if (slug === '_index' || slug === 'index') {
+    const cat = str(url.searchParams.get('category'), 30);
+    return htmlOut(res, 200, renderIndex(posts, { base, category: CATEGORIES.some((c) => c.key === cat) ? cat : '' }), cache);
+  }
+  const p = posts.find((x) => x.slug === slug);
+  if (!p) return htmlOut(res, 404, renderNotFound(base), 'public, s-maxage=30');
+  query(`UPDATE posts SET views = views + 1 WHERE id = $1`, [p.id]).catch(() => {});
+  const related = posts.filter((x) => x.id !== p.id && x.category === p.category).concat(posts.filter((x) => x.id !== p.id && x.category !== p.category)).slice(0, 3);
+  return htmlOut(res, 200, renderPost(p, { base, related }), cache);
+}
+
+async function mktPosts() {
+  const rows = await query(`SELECT id, slug, title, category, status, views, published_at, updated_at, created_at, cover FROM posts ORDER BY COALESCE(NULLIF(published_at, ''), updated_at) DESC, id DESC`);
+  return { rows, categories: CATEGORIES, ctas: Object.entries(CTAS).map(([key, v]) => ({ key, label: v.label })), base: SITE_BASE() };
+}
+async function mktPost(u, b) {
+  const p = await one(`SELECT * FROM posts WHERE id = $1`, [int(b.id)]);
+  if (!p) fail(404, 'Post not found.');
+  return { post: postOut(p) };
+}
+function postFields(b) {
+  const faq = (Array.isArray(b.faq) ? b.faq : []).slice(0, 12).map((x) => ({ q: str(x && x.q, 300), a: str(x && x.a, 1500) })).filter((x) => x.q && x.a);
+  return {
+    title: str(b.title, 200), excerpt: str(b.excerpt, 400), body: str(b.body, 60000), cover: str(b.cover, 200), cover_alt: str(b.cover_alt, 200),
+    category: CATEGORIES.some((c) => c.key === b.category) ? b.category : 'culture', author: str(b.author, 120) || 'Dé Pitch', author_role: str(b.author_role, 120),
+    faq: JSON.stringify(faq), bridge: str(b.bridge, 800), cta: CTAS[b.cta] ? b.cta : 'consultation', cta_label: str(b.cta_label, 60),
+    seo_title: str(b.seo_title, 120), seo_description: str(b.seo_description, 300)
+  };
+}
+async function uniqueSlug(want, id) {
+  let base = slugify(want) || 'story', s = base, n = 2;
+  while (await one(`SELECT id FROM posts WHERE slug = $1 AND id <> $2`, [s, id || 0])) s = `${base}-${n++}`;
+  return s;
+}
+async function mktSavePost(u, b) {
+  const id = int(b.id);
+  const ex = id ? await one(`SELECT * FROM posts WHERE id = $1`, [id]) : null;
+  if (id && !ex) fail(404, 'Post not found.');
+  const f = postFields(b);
+  if (!f.title) fail(400, 'Add a title.');
+  const slug = await uniqueSlug(b.slug || f.title, id);
+  const status = b.status === 'published' ? 'published' : b.status === 'draft' ? 'draft' : (ex ? ex.status : 'draft');
+  if (status === 'published') {
+    if (!f.body || f.body.split(/\s+/).length < 80) fail(400, 'The story needs a body of at least 80 words before publishing.');
+    if (!f.excerpt && !f.seo_description) fail(400, 'Add a short summary before publishing (it shows on Google and in the list).');
+    if (!f.cover) fail(400, 'Choose a cover photo before publishing.');
+  }
+  const now = nowIso();
+  const publishedAt = status === 'published' ? ((ex && ex.published_at) || now) : (ex ? ex.published_at : '');
+  const cols = ['slug', 'title', 'excerpt', 'body', 'cover', 'cover_alt', 'category', 'author', 'author_role', 'faq', 'bridge', 'cta', 'cta_label', 'seo_title', 'seo_description', 'status', 'published_at', 'updated_at'];
+  const vals = [slug, f.title, f.excerpt, f.body, f.cover, f.cover_alt, f.category, f.author, f.author_role, f.faq, f.bridge, f.cta, f.cta_label, f.seo_title, f.seo_description, status, publishedAt, now];
+  if (ex) {
+    await query(`UPDATE posts SET ${cols.map((c, i) => `${c} = $${i + 1}`).join(', ')} WHERE id = $${cols.length + 1}`, [...vals, id]);
+    return { id, slug, status, url: `${SITE_BASE()}/scoop/${slug}` };
+  }
+  const r = await one(`INSERT INTO posts (${cols.join(', ')}, created_at, created_by) VALUES (${cols.map((c, i) => '$' + (i + 1)).join(', ')}, $${cols.length + 1}, $${cols.length + 2}) RETURNING id`, [...vals, now, u.id || null]);
+  return { id: r.id, slug, status, url: `${SITE_BASE()}/scoop/${slug}` };
+}
+async function mktDeletePost(u, b) { await query(`DELETE FROM posts WHERE id = $1`, [int(b.id)]); return { ok: true }; }
+async function mktPreviewPost(u, b) {
+  const f = postFields(b);
+  return { html: renderPost({ ...f, faq: json(f.faq, []), slug: slugify(b.slug || f.title) || 'preview', status: 'draft', published_at: nowIso() }, { base: '', preview: true }) };
+}
+
 /* ---------- notification counts for employees and clients ---------- */
 async function meCounts(u) {
   const seen = json(u.seen || '{}', {});
@@ -1726,6 +1815,7 @@ const ACTIONS = {
   'mkt.contacts': mktContacts, 'mkt.saveContact': mktSaveContact, 'mkt.deleteContact': mktDeleteContact, 'mkt.importContacts': mktImportContacts,
   'mkt.importFromPortal': mktImportFromPortal, 'mkt.templates': mktTemplates, 'mkt.preview': mktPreview, 'mkt.campaigns': mktCampaigns,
   'mkt.campaign': mktCampaign, 'mkt.saveCampaign': mktSaveCampaign, 'mkt.duplicate': mktDuplicate, 'mkt.deleteCampaign': mktDeleteCampaign,
+  'mkt.posts': mktPosts, 'mkt.post': mktPost, 'mkt.savePost': mktSavePost, 'mkt.deletePost': mktDeletePost, 'mkt.previewPost': mktPreviewPost,
   'mkt.audienceCount': mktAudienceCount, 'mkt.sendTest': mktSendTest, 'mkt.send': mktSend, 'mkt.uploadImage': mktUploadImage, 'mkt.images': mktImages,
   'emp.dashboard': empDashboard, 'emp.payroll': empPayroll, 'emp.payslip': empPayslip,
   'emp.reports': empReports, 'emp.submitReport': empSubmitReport,

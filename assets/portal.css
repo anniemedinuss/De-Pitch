@@ -276,3 +276,17 @@ div.field select, .img-row select { padding: .6rem .7rem; border: 1px solid var(
 .check { display: inline-flex; gap: 6px; align-items: center; font-size: .9rem; cursor: pointer; }
 .tag { display: inline-block; font-size: .74rem; padding: 2px 8px; border-radius: 999px; background: var(--sage-soft); color: var(--navy); margin: 1px 0; white-space: nowrap; }
 @media (max-width: 980px) { .mkt-grid { grid-template-columns: 1fr; } .mkt-preview { position: static; } }
+
+/* blog editor */
+.md-bar { display: flex; flex-wrap: wrap; gap: 4px; background: #f3f4f4; border: 1px solid var(--line); border-radius: 8px; padding: 5px; }
+.md-bar button { border: 0; background: transparent; padding: .38rem .6rem; border-radius: 6px; cursor: pointer; font: inherit; font-size: .84rem; color: var(--ink); }
+.md-bar button:hover { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.md-area { width: 100%; font: 16px/1.7 inherit; font-family: inherit; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; resize: vertical; min-height: 380px; }
+.faq-row { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.faq-row .btn { justify-self: start; }
+.input { width: 100%; }
+textarea.input { padding: .6rem .7rem; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+.serp { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: #fff; font-family: Arial, sans-serif; }
+.serp-url { font-size: 12px; color: #4d5156; }
+.serp-title { font-size: 19px; color: #1a0dab; margin: 4px 0 3px; line-height: 1.3; }
+.serp-desc { font-size: 14px; color: #4d5156; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

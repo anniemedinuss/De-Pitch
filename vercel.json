@@ -75,5 +75,23 @@
       "path": "/api/portal?task=sweep",
       "schedule": "0 8 * * *"
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/scoop",
+      "destination": "/api/portal?blog=_index"
+    },
+    {
+      "source": "/scoop.html",
+      "destination": "/api/portal?blog=_index"
+    },
+    {
+      "source": "/scoop/:slug",
+      "destination": "/api/portal?blog=:slug"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api/portal?sitemap=1"
+    }
   ]
 }

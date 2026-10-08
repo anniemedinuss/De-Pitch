@@ -328,6 +328,12 @@ const SCHEMA = [
     status TEXT DEFAULT 'queued', error TEXT DEFAULT '', sent_at TEXT DEFAULT '', opened_at TEXT DEFAULT '',
     PRIMARY KEY (campaign_id, contact_id))`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS welcomed_at TEXT DEFAULT ''`,
+  `CREATE TABLE IF NOT EXISTS posts (
+    id SERIAL PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT DEFAULT '', excerpt TEXT DEFAULT '', body TEXT DEFAULT '',
+    cover TEXT DEFAULT '', cover_alt TEXT DEFAULT '', category TEXT DEFAULT 'culture', author TEXT DEFAULT 'Dé Pitch', author_role TEXT DEFAULT '',
+    faq TEXT DEFAULT '[]', bridge TEXT DEFAULT '', cta TEXT DEFAULT 'consultation', cta_label TEXT DEFAULT '',
+    seo_title TEXT DEFAULT '', seo_description TEXT DEFAULT '', status TEXT DEFAULT 'draft', views INTEGER DEFAULT 0,
+    published_at TEXT DEFAULT '', created_by INTEGER, created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`,
   `CREATE INDEX IF NOT EXISTS payroll_user_idx ON payroll (user_id)`,
   `CREATE INDEX IF NOT EXISTS reports_user_idx ON reports (user_id)`,
   `CREATE INDEX IF NOT EXISTS requests_user_idx ON requests (user_id)`,

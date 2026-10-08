@@ -376,9 +376,10 @@ p { margin: 0; }
 .date-hint.bad { color: #c0392b; opacity: 1; font-weight: 600; }
 
 /* ================= The Scoop (blog) ================= */
-.scoop-head { padding-top: clamp(40px, 6vw, 80px); }
-.scoop-head .lead { margin-top: .8rem; color: var(--muted); }
-.scoop-cats { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 1.6rem; }
+.scoop-head { padding-top: clamp(40px, 6vw, 80px); padding-bottom: clamp(10px, 2vw, 24px); text-align: center; }
+.scoop-head .lead { margin: .8rem auto 0; color: var(--muted); }
+.scoop-empty { text-align: center; margin: 0 auto; padding: clamp(10px, 2vw, 24px) 0 clamp(20px, 3vw, 40px); }
+.scoop-cats { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 1.6rem; }
 .scoop-cats a { text-decoration: none; color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: .45rem .95rem; font-size: .85rem; }
 .scoop-cats a.on, .scoop-cats a:hover { background: var(--black); color: #fff; border-color: var(--black); }
 .post-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(18px, 2.4vw, 32px); }

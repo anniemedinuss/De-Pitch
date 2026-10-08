@@ -105,7 +105,7 @@ export function renderIndex(posts, { base, category }) {
   <section class="wrap block scoop-head"><p class="eyebrow">The Scoop</p><h1 class="h-xl">Work, life and everything in between.</h1>
     <p class="lead">Honest stories and sharp takes on careers, money and work culture in Nigeria and beyond.</p>${posts.length ? chips : ''}</section>
   <section class="wrap block">${list.length ? `<div class="post-grid">${list.map((p, i) => card(p, base, i === 0 && !category)).join('')}</div>`
-    : '<p class="lead" style="padding:40px 0">New stories are on the way. Join the list below and we’ll send them to you first.</p>'}</section>
+    : '<p class="lead scoop-empty">New stories are on the way. Join the list below and we’ll send them to you first.</p>'}</section>
   ${newsletter()}
 </main>`;
   const url = `${base}/scoop${category ? '?category=' + category : ''}`;

@@ -608,6 +608,31 @@ async function admReviewReport(admin, b) {
   return { ok: true };
 }
 
+// Bring an employee's past weekly reports (e.g. from the old spreadsheet) into the portal.
+// Weeks already on file for that employee are skipped, so it is safe to run twice.
+async function admImportReports(admin, b) {
+  const email = str(b.email, 200).toLowerCase();
+  const u = email ? await one(`SELECT id, name FROM users WHERE lower(email)=$1 AND role='employee'`, [email]) : await one(`SELECT id, name FROM users WHERE id=$1 AND role='employee'`, [int(b.user_id)]);
+  if (!u) fail(404, 'Employee not found.');
+  const list = (Array.isArray(b.reports) ? b.reports : []).slice(0, 200);
+  const status = ['approved', 'submitted'].includes(b.status) ? b.status : 'approved';
+  const note = str(b.hr_note, 300);
+  let added = 0, skipped = 0; const errors = [];
+  for (const r of list) {
+    try {
+      const { ws, we, tasks, blockers } = cleanReport(r);
+      if (await one(`SELECT id FROM reports WHERE user_id=$1 AND week_start=$2`, [u.id, ws])) { skipped++; continue; }
+      const sub = /^\d{4}-\d{2}-\d{2}$/.test(String(r.submitted_on || '')) ? r.submitted_on : we;
+      await query(
+        `INSERT INTO reports (user_id, client_name, week_start, week_end, submitted_on, tasks, blockers, status, hr_note, reviewed_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [u.id, str(r.client_name, 160), ws, we, sub, JSON.stringify(tasks), JSON.stringify(blockers), status, note, status === 'approved' ? nowIso() : '', nowIso()]);
+      added++;
+    } catch (e) { errors.push(`${r.week_start || '?'}: ${e.message}`); }
+  }
+  return { employee: u.name, added, skipped, errors };
+}
+
 async function admRequests(admin, b) {
   const status = str(b.status, 30);
   return { rows: await query(
@@ -1833,7 +1858,7 @@ const ACTIONS = {
   'adm.resetPassword': admResetPassword, 'adm.clients': admClients, 'adm.saveClient': admSaveClient,
   'adm.payroll': admPayroll, 'adm.generatePayroll': admGeneratePayroll, 'adm.savePayroll': admSavePayroll,
   'adm.markPaid': admMarkPaid, 'adm.deletePayroll': admDeletePayroll, 'adm.payslip': admEmployeePayslip,
-  'adm.reports': admReports, 'adm.reviewReport': admReviewReport,
+  'adm.reports': admReports, 'adm.reviewReport': admReviewReport, 'adm.importReports': admImportReports,
   'adm.requests': admRequests, 'adm.reviewRequest': admReviewRequest,
   'adm.invoices': admInvoices, 'adm.invoice': admInvoice, 'adm.draftInvoice': admDraftInvoice, 'adm.saveInvoice': admSaveInvoice,
   'adm.invoiceStatus': admInvoiceStatus, 'adm.deleteInvoice': admDeleteInvoice,

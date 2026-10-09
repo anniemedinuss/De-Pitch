@@ -315,6 +315,7 @@ function cleanReport(b) {
    so the form never closes. REPORT_LOCK can turn the old Friday 6pm (Lagos) lock back on:
    late reports would then need a reason accepted by People Ops. */
 const REPORT_LOCK = false;
+const REPORT_REMINDERS_FROM = '2026-10-16'; // first Friday the reminder email goes out
 const REPORT_DUE_HOUR = 17;
 const REPORT_LOCK_HOUR = 18;
 function addDaysIso(d, n) { const t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
@@ -664,6 +665,7 @@ async function admReviewLate(admin, b) {
 async function sweepReportReminders() {
   const n = lagosNow();
   if (n.getUTCDay() !== 5 || n.getUTCHours() < 12) return 0;
+  if (n.toISOString().slice(0, 10) < REPORT_REMINDERS_FROM) return 0;
   const ws = currentWeekStart();
   const key = `report-reminder:${ws}`;
   const claimed = await one(`INSERT INTO reminders (key, sent_at) VALUES ($1,$2) ON CONFLICT (key) DO NOTHING RETURNING key`, [key, nowIso()]);

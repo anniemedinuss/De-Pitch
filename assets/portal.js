@@ -515,19 +515,21 @@
     var mon = addDays(isoToday(), -dow);
     return { start: mon, end: addDays(mon, 4) };
   }
-  /* Weekly report deadline: due Friday 5pm, closes 6pm (Lagos time, UTC+1). */
+  /* Weekly report deadline: due every Friday, no cut-off time (staff work across time zones).
+     REPORT_LOCK must match the server: when true, reports close Friday 6pm Lagos time. */
+  var REPORT_LOCK = false;
   function lagosNow() { return new Date(Date.now() + 3600000); }
   function lagosWeekStart() { var n = lagosNow(); var d = n.toISOString().slice(0, 10); var t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() - ((n.getUTCDay() + 6) % 7)); return t.toISOString().slice(0, 10); }
   function reportFriday(ws) { var t = new Date(ws + 'T00:00:00Z'); var dow = t.getUTCDay(); t.setUTCDate(t.getUTCDate() + (dow <= 5 ? 5 - dow : 6)); return t.toISOString().slice(0, 10); }
-  function reportLocked(ws) { return /^\d{4}-\d{2}-\d{2}$/.test(ws) && Date.now() > Date.parse(reportFriday(ws) + 'T18:00:00+01:00'); }
+  function reportLocked(ws) { return REPORT_LOCK && /^\d{4}-\d{2}-\d{2}$/.test(ws) && Date.now() > Date.parse(reportFriday(ws) + 'T18:00:00+01:00'); }
   function reportReminder(submittedThisWeek) {
     if (submittedThisWeek) return '';
     var n = lagosNow(), day = n.getUTCDay(), h = n.getUTCHours(), ws = lagosWeekStart();
     var msg, cls = 'remind';
-    if (reportLocked(ws)) { msg = 'This week’s report closed on Friday at 6pm. <a href="#/reports">Tell People Ops why it’s late</a>.'; cls += ' bad'; }
-    else if (day === 5 && h >= 17) { msg = 'Your weekly report is overdue. The form closes at <b>6pm today</b>. <a href="#/reports">Submit it now</a>.'; cls += ' bad'; }
-    else if (day === 5) { msg = 'Reminder: your weekly report is due <b>today by 5pm</b>. <a href="#/reports">Submit it now</a>.'; cls += ' warn'; }
-    else msg = 'This week’s report is due <b>Friday by 5pm</b>. The form closes at 6pm.';
+    if (day === 0) { msg = 'This week’s report is overdue. <a href="#/reports">Submit it now</a>.'; cls += ' bad'; }
+    else if (day === 6) { msg = 'This week’s report was due on Friday. If you haven’t sent it yet, <a href="#/reports">submit it now</a>.'; cls += ' warn'; }
+    else if (day === 5) { msg = 'Reminder: your weekly report is due <b>today</b>. <a href="#/reports">Submit it now</a>.'; cls += ' warn'; }
+    else msg = 'This week’s report is due on <b>Friday</b>.';
     return '<div class="' + cls + '"><span class="tag">Weekly report</span><span>' + msg + '</span></div>';
   }
   function lateExcuseModal(ws, we, done) {
@@ -569,7 +571,7 @@
       var excuses = j.excuses || [];
       var submitted = function (ws) { return j.rows.some(function (r) { return r.week_start === ws; }); };
       el.innerHTML = announceBar() + reportReminder(submitted(lagosWeekStart())) +
-        head('Weekly reports', 'Submit one report each week, due Friday by 5pm. The form closes at 6pm. People Ops reviews it and you will see the decision here.') +
+        head('Weekly reports', 'Submit one report each week, due every Friday. People Ops reviews it and you will see the decision here.') +
         '<form class="panel stack" id="wr" novalidate>' +
         '<div class="grid-3"><label class="field">Client assigned<input name="client_name" id="wr-client" value="' + esc(S.user.client_name) + '" placeholder="Client name"></label>' +
         '<label class="field">Week start date<input type="date" name="week_start" id="wr-start" value="' + wb.start + '" required></label>' +
@@ -1241,9 +1243,9 @@
       var j = res[0], lx = res[1].rows || [];
       var pendingLx = lx.filter(function (x) { return x.status === 'pending'; });
       var lxShown = pendingLx.concat(lx.filter(function (x) { return x.status !== 'pending'; }).slice(0, 8));
-      el.innerHTML = head('Weekly reports', 'Approve reports or send them back with a note. Reports are due Friday by 5pm and close at 6pm.') +
+      el.innerHTML = head('Weekly reports', 'Approve reports or send them back with a note. Reports are due every Friday.') +
         (lxShown.length ? '<div class="panel"><div class="panel-head"><h2>Late report explanations' + (pendingLx.length ? ' <span class="pill warn">' + pendingLx.length + ' to review</span>' : '') + '</h2></div>' +
-          '<p class="small muted">Employees who missed the Friday 6pm cutoff explain why here. Mark the reason valid to let them submit that week’s report.</p>' +
+          '<p class="small muted">Explanations sent for late reports. Mark the reason valid to let them submit that week’s report.</p>' +
           table(['Employee', 'Week', 'Reason', 'Sent', 'Decision', '>'], lxShown.map(function (x, i) {
             return '<tr><td><b>' + esc(x.name) + '</b></td><td>' + esc(fmtDate(x.week_start)) + '</td><td class="small" style="max-width:340px">' + esc(x.reason) + '</td><td>' + esc(fmtDate(String(x.created_at).slice(0, 10))) + '</td><td>' +
               (x.used_at ? pill('approved', 'Valid · report in') : pill(x.status)) + (x.hr_note ? '<div class="small muted">' + esc(x.hr_note) + '</div>' : '') + '</td>' +

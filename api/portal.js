@@ -279,7 +279,7 @@ async function empPayslip(u, b) {
 async function empReports(u) {
   const rows = await query(`SELECT * FROM reports WHERE user_id = $1 ORDER BY week_start DESC, id DESC LIMIT 100`, [u.id]);
   const excuses = await query(`SELECT id, week_start, week_end, reason, status, hr_note, created_at, reviewed_at, used_at FROM late_reports WHERE user_id = $1 ORDER BY id DESC LIMIT 30`, [u.id]);
-  return { rows: rows.map((r) => ({ ...r, tasks: json(r.tasks), blockers: json(r.blockers) })), excuses, deadline: { due_hour: REPORT_DUE_HOUR, lock_hour: REPORT_LOCK_HOUR, week_start: currentWeekStart() } };
+  return { rows: rows.map((r) => ({ ...r, tasks: json(r.tasks), blockers: json(r.blockers) })), excuses, deadline: { lock: REPORT_LOCK, week_start: currentWeekStart() } };
 }
 
 async function empLateExcuse(u, b) {
@@ -311,8 +311,10 @@ function cleanReport(b) {
 }
 
 /* ---- Weekly report deadline ----
-   Reports are due Friday by 5pm (Lagos) and lock at 6pm. After that, the employee
-   explains why it is late; if People Ops accepts the reason, they can submit it. */
+   Reports are due every Friday. There is no cut-off time (staff work across time zones),
+   so the form never closes. REPORT_LOCK can turn the old Friday 6pm (Lagos) lock back on:
+   late reports would then need a reason accepted by People Ops. */
+const REPORT_LOCK = false;
 const REPORT_DUE_HOUR = 17;
 const REPORT_LOCK_HOUR = 18;
 function addDaysIso(d, n) { const t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
@@ -324,7 +326,7 @@ function currentWeekStart() { const n = lagosNow(); const d = n.toISOString().sl
 async function empSubmitReport(u, b) {
   const { ws, we, tasks, blockers } = cleanReport(b);
   let late = false, excuse = null;
-  if (Date.now() > reportLockTime(ws)) {
+  if (REPORT_LOCK && Date.now() > reportLockTime(ws)) {
     excuse = await one(`SELECT id FROM late_reports WHERE user_id=$1 AND week_start=$2 AND status='valid' AND used_at='' ORDER BY id DESC LIMIT 1`, [u.id, ws]);
     if (!excuse) fail(403, `Reports for this week closed on Friday ${new Date(reportFriday(ws) + 'T12:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })} at 6pm. Tell People Ops why it's late. If they accept your reason, you can submit it.`, 'late');
     late = true;
@@ -658,10 +660,10 @@ async function admReviewLate(admin, b) {
 }
 
 /* Friday reminder: emails every active employee who has not yet sent this week's report.
-   Runs from the daily sweep, once per Friday (Lagos time), between 9am and 5pm. */
+   Runs from the daily sweep, once per Friday (Lagos time), from 9am. */
 async function sweepReportReminders() {
   const n = lagosNow();
-  if (n.getUTCDay() !== 5 || n.getUTCHours() < 9 || n.getUTCHours() >= REPORT_DUE_HOUR) return 0;
+  if (n.getUTCDay() !== 5 || n.getUTCHours() < 9) return 0;
   const ws = currentWeekStart();
   const key = `report-reminder:${ws}`;
   const claimed = await one(`INSERT INTO reminders (key, sent_at) VALUES ($1,$2) ON CONFLICT (key) DO NOTHING RETURNING key`, [key, nowIso()]);
@@ -670,8 +672,8 @@ async function sweepReportReminders() {
   let sent = 0;
   for (const u of due) {
     const first = escapeHtml(String(u.name || '').split(' ')[0] || 'there');
-    const ok = await sendEmail({ to: u.email, subject: 'Reminder: your weekly report is due today by 5pm', replyTo: ADMIN_EMAIL,
-      html: layout('Your weekly report is due today', `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">Friendly reminder: please submit this week's report on the Dé Pitch portal <b>by 5pm today</b>. The form closes at <b>6pm</b>. After that you'll need to explain to People Ops why it's late.</p><p><a href="${assetBase()}/portal#/reports" style="display:inline-block;background:#011D38;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Submit my weekly report</a></p>`) });
+    const ok = await sendEmail({ to: u.email, subject: 'Reminder: your weekly report is due today', replyTo: ADMIN_EMAIL,
+      html: layout('Your weekly report is due today', `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">Friendly reminder: please submit this week's report on the Dé Pitch portal <b>today</b>.</p><p><a href="${assetBase()}/portal#/reports" style="display:inline-block;background:#011D38;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Submit my weekly report</a></p>`) });
     if (ok) sent++;
   }
   await query(`UPDATE reminders SET sent_count=$1 WHERE key=$2`, [sent, key]);

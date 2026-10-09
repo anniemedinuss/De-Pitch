@@ -13,6 +13,9 @@ import {
 } from './_lib/auth.js';
 
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'peopleops@depitchhq.com').toLowerCase();
+// Who emails come from: bookings from office@, anything sent to staff from peopleops@.
+const BOOKING_FROM = process.env.BOOKING_FROM || 'Dé Pitch <office@depitchhq.com>';
+const STAFF_FROM = process.env.STAFF_FROM || 'Dé Pitch People Ops <peopleops@depitchhq.com>';
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const ALLOWED_MIME = {
   'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp',
@@ -655,7 +658,7 @@ async function admReviewLate(admin, b) {
     const body = status === 'valid'
       ? `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">People Ops has accepted your reason for the late weekly report (${week}). You can now submit it in the portal under <b>Weekly reports</b>.</p>`
       : `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">People Ops reviewed your reason for the late weekly report (${week}) and did not accept it, so this week's report stays closed.</p>`;
-    await sendEmail({ to: u.email, subject: status === 'valid' ? 'You can now submit your late weekly report' : 'Your late weekly report', html: layout(status === 'valid' ? 'Reason accepted' : 'Reason not accepted', body + (note ? `<p style="font-size:15px;line-height:1.6"><b>Note from People Ops:</b> ${escapeHtml(note)}</p>` : '') + `<p><a href="${assetBase()}/portal#/reports" style="display:inline-block;background:#011D38;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Open the portal</a></p>`), replyTo: ADMIN_EMAIL });
+    await sendEmail({ to: u.email, from: STAFF_FROM, subject: status === 'valid' ? 'You can now submit your late weekly report' : 'Your late weekly report', html: layout(status === 'valid' ? 'Reason accepted' : 'Reason not accepted', body + (note ? `<p style="font-size:15px;line-height:1.6"><b>Note from People Ops:</b> ${escapeHtml(note)}</p>` : '') + `<p><a href="${assetBase()}/portal#/reports" style="display:inline-block;background:#011D38;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Open the portal</a></p>`), replyTo: ADMIN_EMAIL });
   }
   return { ok: true };
 }
@@ -674,7 +677,7 @@ async function sweepReportReminders() {
   let sent = 0;
   for (const u of due) {
     const first = escapeHtml(String(u.name || '').split(' ')[0] || 'there');
-    const ok = await sendEmail({ to: u.email, subject: 'Reminder: submit your weekly report today', replyTo: ADMIN_EMAIL,
+    const ok = await sendEmail({ to: u.email, from: STAFF_FROM, subject: 'Reminder: submit your weekly report today', replyTo: ADMIN_EMAIL,
       html: layout('Weekly report reminder', `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">Just a reminder to make sure you submit your weekly report on the Dé Pitch portal <b>before your close of work today</b>.</p><p><a href="${assetBase()}/portal#/reports" style="display:inline-block;background:#011D38;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Submit my weekly report</a></p>`) });
     if (ok) sent++;
   }
@@ -1052,7 +1055,7 @@ async function pubForm(rq, b) {
 /* ---- Booking emails ----
    Sent from, and replied to, office@depitchhq.com: a confirmation straight after booking
    and a reminder the day before. Times are WAT, with the visitor's own time beside them. */
-const BOOKING_FROM = process.env.BOOKING_FROM || 'Dé Pitch <office@depitchhq.com>';
+
 const BOOKING_REPLY_TO = process.env.BOOKING_REPLY_TO || 'office@depitchhq.com';
 function bookingWhen(e) {
   const f = typeof e.fields === 'string' ? json(e.fields, {}) : (e.fields || {});

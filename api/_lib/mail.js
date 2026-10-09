@@ -5,7 +5,7 @@
 //   needs a one-time "Activate" click per receiving address.
 
 const SITE = () => (process.env.SITE_URL || 'https://www.depitchhq.com').replace(/\/$/, '');
-const FROM = () => process.env.MAIL_FROM || 'Dé Pitch <hello@depitchhq.com>';
+const FROM = () => process.env.MAIL_FROM || 'Dé Pitch <office@depitchhq.com>';
 
 export function canEmailVisitors() {
   return !!process.env.RESEND_API_KEY;

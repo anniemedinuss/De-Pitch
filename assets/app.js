@@ -90,16 +90,16 @@
       var sameDay = !day || at.getDate() === Number(day.slice(8, 10));
       return t + (sameDay ? '' : ' ' + at.toLocaleDateString([], { weekday: 'short' })) + ' your time';
     }
-    var away = localLabel('', '12:00') !== '';
-    var BASE = 'Monday to Friday, 11am to 3pm Lagos time.' + (away ? ' Your local time is shown beside each slot.' : '');
-    hint.textContent = BASE;
+    // The hint under the date only appears for a problem (a weekend, or a fully booked day).
+    var BASE = '';
+    hint.textContent = BASE; hint.hidden = true;
     function loadSlots(day) {
       if (!timeSel) return;
       Array.prototype.forEach.call(timeSel.options, function (o) {
         if (!o.value) return;
         o.dataset.base = o.dataset.base || o.textContent;
         var loc = localLabel(day, o.value);
-        o.dataset.label = o.dataset.base + (loc ? ' WAT (' + loc + ')' : '');
+        o.dataset.label = loc ? loc + ' (' + o.dataset.base + ' Lagos)' : o.dataset.base;
         o.disabled = false; o.textContent = o.dataset.label;
       });
       if (!day) return;
@@ -110,18 +110,30 @@
           Array.prototype.forEach.call(timeSel.options, function (o) {
             if (o.value && taken.indexOf(o.value) > -1) { o.disabled = true; o.textContent = o.dataset.label + ' (booked)'; if (timeSel.value === o.value) timeSel.value = ''; }
           });
-          if (taken.length >= timeSel.options.length - 1) { inp.setCustomValidity('That day is fully booked. Please choose another weekday.'); hint.textContent = 'That day is fully booked. Please choose another weekday.'; hint.classList.add('bad'); }
+          if (taken.length >= timeSel.options.length - 1) { inp.setCustomValidity('That day is fully booked. Please choose another weekday.'); hint.textContent = 'That day is fully booked. Please choose another weekday.'; hint.classList.add('bad'); hint.hidden = false; }
         }).catch(function () {});
     }
     function check() {
       var v = inp.value, msg = '';
       if (v) { var d = new Date(v + 'T12:00:00').getDay(); if (d === 0 || d === 6) msg = 'We book consultations Monday to Friday. Please choose a weekday.'; }
       inp.setCustomValidity(msg);
-      hint.textContent = msg || BASE; hint.classList.toggle('bad', !!msg);
+      hint.textContent = msg || BASE; hint.classList.toggle('bad', !!msg); hint.hidden = !msg;
       if (msg) inp.reportValidity(); else loadSlots(v);
     }
     inp.addEventListener('change', check);
     loadSlots('');
+  });
+  // The phone / WhatsApp number field only shows (and is only required) for a WhatsApp or phone call.
+  document.querySelectorAll('select[name="mode_of_consultation"]').forEach(function (sel) {
+    var phone = sel.form && sel.form.querySelector('input[name="phone"]');
+    if (!phone) return;
+    function sync() {
+      var need = /whatsapp|phone/i.test(sel.value);
+      phone.hidden = !need; phone.required = need;
+      phone.placeholder = /whatsapp/i.test(sel.value) ? 'WhatsApp number (with country code)' : 'Phone number (with country code)';
+      if (!need) phone.value = '';
+    }
+    sel.addEventListener('change', sync); sync();
   });
   document.querySelectorAll('form[data-form]').forEach(function (form) {
     var next = form.getAttribute('data-success') === 'newsletterreceived' ? 'youre-in.html' : 'thank-you.html';

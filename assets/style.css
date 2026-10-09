@@ -439,3 +439,6 @@ p { margin: 0; }
 @media (max-width: 560px) { .cards.cards-paused { grid-template-columns: 1fr; } }
 .stats.stats-paused { grid-template-columns: repeat(2, 1fr); max-width: 520px; margin-left: auto; margin-right: auto; }
 .stats.stats-paused .stat:last-child { grid-column: auto; }
+
+/* Booking form: fields shown only when needed (phone number for calls, problem hints) */
+.form [hidden], .date-hint[hidden] { display: none !important; }

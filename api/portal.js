@@ -15,7 +15,7 @@ import {
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'peopleops@depitchhq.com').toLowerCase();
 // Who emails come from: bookings from office@, anything sent to staff from peopleops@.
 const BOOKING_FROM = process.env.BOOKING_FROM || 'Dé Pitch <office@depitchhq.com>';
-const STAFF_FROM = process.env.STAFF_FROM || 'Dé Pitch People Ops <peopleops@depitchhq.com>';
+const STAFF_FROM = process.env.STAFF_FROM || 'Dé Pitch Talent Office <peopleops@depitchhq.com>';
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const ALLOWED_MIME = {
   'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp',

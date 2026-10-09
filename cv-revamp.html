@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/style.css?v=10082115">
+  <link rel="stylesheet" href="assets/style.css?v=10091715">
 </head>
 <body data-page="cvrevamp">
 
@@ -77,12 +77,14 @@
   <input type="email" name="email" placeholder="Email" maxlength="128" required aria-label="Email">
   <select name="mode_of_consultation" required aria-label="Mode of consultation">
     <option value="" disabled selected>– Mode of Consultation –</option>
-    <option>Virtual Meeting</option>
-    <option>Phone Call</option>
+    <option>WhatsApp call</option>
+    <option>Phone call</option>
+    <option>Zoom meeting</option>
   </select>
+  <input type="tel" name="phone" placeholder="Phone / WhatsApp number" maxlength="40" required aria-label="Phone or WhatsApp number">
   <label class="field-label">Preferred date of consultation</label>
   <input type="date" name="date_of_consultation" required aria-label="Date of consultation">
-  <label class="field-label">Preferred time (WAT)</label>
+  <label class="field-label">Preferred time (WAT, Lagos time)</label>
   <select name="time_of_consultation" required aria-label="Time of consultation">
     <option value="" disabled selected>– Choose a time –</option>
     <option value="11:00">11:00 AM</option>
@@ -246,6 +248,6 @@
   </div>
 </div>
 
-<script src="assets/app.js?v=10082115"></script>
+<script src="assets/app.js?v=10091715"></script>
 </body>
 </html>

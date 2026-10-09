@@ -1726,7 +1726,7 @@
     var consult = function (title) {
       return '<div class="section-label">' + esc(title || 'Consultation') + '</div><div class="grid-2">' + dateField('sv-cdate', 'Consultation date', r.consult_date) +
         '<label class="field">Time (WAT)<select id="sv-ctime"><option value="">—</option>' + SLOTS.map(function (t) { return '<option value="' + t + '"' + (r.consult_time === t ? ' selected' : '') + '>' + slotLabel(t) + '</option>'; }).join('') + '</select></label>' +
-        '<label class="field">Mode<select id="sv-cmode">' + ['', 'Virtual Meeting', 'Phone Call', 'In person'].map(function (o) { return '<option' + (r.consult_mode === o ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' +
+        '<label class="field">Mode<select id="sv-cmode">' + ['', 'WhatsApp call', 'Phone call', 'Zoom meeting', 'Virtual Meeting', 'Phone Call', 'In person'].map(function (o) { return '<option' + (r.consult_mode === o ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' +
         dateField('sv-cdone', 'Consultation held on', r.consult_done_at) + '</div>';
     };
     var closed = dateField('sv-closed', 'Closed / not going ahead on', r.closed_at);

@@ -1045,7 +1045,64 @@ async function pubForm(rq, b) {
   await notify(`Website form: ${form}`, { ...fields, 'CV / file': fileId ? 'Uploaded. Open it in the portal under Website enquiries.' : '' }, NOT_ENQUIRIES.includes(form) ? RELATIONS_EMAIL : FORMS_EMAIL);
   if (!NOT_ENQUIRIES.includes(form) && !inOfficeHours()) await slackFollowUp(row, 'sent after working hours');
   await addContactFromForm(form, service, name, mail);
+  if (service && cDate && cTime && mail) await sendBookingEmail(row, 'confirm');
   return { ok: true, id: row.id };
+}
+
+/* ---- Booking emails ----
+   Sent from, and replied to, office@depitchhq.com: a confirmation straight after booking
+   and a reminder the day before. Times are WAT, with the visitor's own time beside them. */
+const BOOKING_FROM = process.env.BOOKING_FROM || 'Dé Pitch <office@depitchhq.com>';
+const BOOKING_REPLY_TO = process.env.BOOKING_REPLY_TO || 'office@depitchhq.com';
+function bookingWhen(e) {
+  const f = typeof e.fields === 'string' ? json(e.fields, {}) : (e.fields || {});
+  const at = new Date(`${String(e.consult_date).slice(0, 10)}T${e.consult_time}:00+01:00`);
+  const fmt = (tz, opts) => { try { return at.toLocaleString('en-GB', { timeZone: tz, ...opts }); } catch (x) { return ''; } };
+  const day = fmt('Africa/Lagos', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const wat = `${slotLabel(e.consult_time)} WAT (Lagos time)`;
+  const tz = str(f.your_time_zone, 60);
+  let local = '';
+  if (tz && tz !== 'Africa/Lagos') {
+    const t = fmt(tz, { hour: 'numeric', minute: '2-digit', hour12: true }).toUpperCase();
+    const d = fmt(tz, { weekday: 'long', day: 'numeric', month: 'long' });
+    const lagosDay = fmt('Africa/Lagos', { weekday: 'long', day: 'numeric', month: 'long' });
+    if (t && fmt(tz, { hour: '2-digit', minute: '2-digit', hour12: false }) !== fmt('Africa/Lagos', { hour: '2-digit', minute: '2-digit', hour12: false })) local = `${t}${d !== lagosDay ? ` on ${d}` : ''} your time (${tz.replace(/_/g, ' ')})`;
+  }
+  return { day, wat, local, phone: e.phone || f.phone || '', mode: e.consult_mode || f.mode_of_consultation || '' };
+}
+function bookingHow(mode, phone) {
+  const m = String(mode).toLowerCase();
+  if (m.includes('whatsapp')) return `We'll call you on WhatsApp${phone ? ` at <b>${escapeHtml(phone)}</b>` : ''} at the time above.`;
+  if (m.includes('phone')) return `We'll call you${phone ? ` on <b>${escapeHtml(phone)}</b>` : ''} at the time above.`;
+  if (m.includes('zoom') || m.includes('virtual')) return `We'll send your Zoom link to this email before the call.`;
+  return `We'll contact you at the time above.`;
+}
+async function sendBookingEmail(e, kind) {
+  if (!e.email) return false;
+  const w = bookingWhen(e);
+  const what = e.form === 'Free career consultation' ? 'free career consultation' : e.service === 'cv' ? 'CV revamp consultation' : e.service === 'interview' ? 'interview prep session' : 'consultation';
+  const first = escapeHtml(String(e.name || '').split(' ')[0] || 'there');
+  const p = (x) => `<p style="font-size:15px;line-height:1.6">${x}</p>`;
+  const details = `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 14px;border:1px solid #e3e8ee;border-radius:10px;width:100%"><tr><td style="padding:14px 16px;font-size:15px;line-height:1.7">` +
+    `<b>Date:</b> ${escapeHtml(w.day)}<br><b>Time:</b> ${escapeHtml(w.wat)}${w.local ? `<br><span style="color:#5b6878">That's ${escapeHtml(w.local)}</span>` : ''}` +
+    `${w.mode ? `<br><b>How:</b> ${escapeHtml(w.mode)}` : ''}</td></tr></table>`;
+  const body = kind === 'confirm'
+    ? p(`Hi ${first},`) + p(`Thank you for booking your ${what} with Dé Pitch. Here are your details:`) + details + p(bookingHow(w.mode, w.phone)) + p(`Need to change the time? Just reply to this email and we'll sort it out.`) + p('See you soon,<br>The Dé Pitch Team')
+    : p(`Hi ${first},`) + p(`A quick reminder that your ${what} with Dé Pitch is <b>tomorrow</b>:`) + details + p(bookingHow(w.mode, w.phone)) + p(`Can't make it? Reply to this email and we'll find another time.`) + p('See you tomorrow,<br>The Dé Pitch Team');
+  const subject = kind === 'confirm' ? `Booked: your ${what} on ${w.day}` : `Reminder: your ${what} is tomorrow`;
+  const ok = await sendEmail({ to: e.email, from: BOOKING_FROM, replyTo: BOOKING_REPLY_TO, subject, html: layout(kind === 'confirm' ? 'You’re booked in' : 'See you tomorrow', body) });
+  if (ok) await query(`UPDATE enquiries SET ${kind === 'confirm' ? 'confirmed_at' : 'reminder_at'} = $1 WHERE id = $2`, [nowIso(), e.id]);
+  return ok;
+}
+// Day-before reminders, from the daily sweep (and busy-page sweeps), once per booking.
+async function sweepBookingReminders() {
+  const n = new Date(Date.now() + 3600000);
+  if (n.getUTCHours() < 9) return 0;
+  const tomorrow = new Date(n.getTime() + 86400000).toISOString().slice(0, 10);
+  const due = await query(`SELECT * FROM enquiries WHERE service <> '' AND LEFT(consult_date, 10) = $1 AND consult_time <> '' AND closed_at = '' AND consult_done_at = '' AND reminder_at = '' AND email <> '' AND created_at < $2 ORDER BY id LIMIT 20`, [tomorrow, new Date(Date.now() - 12 * 3600000).toISOString()]);
+  let sent = 0;
+  for (const e of due) if (await sendBookingEmail(e, 'reminder')) sent++;
+  return sent;
 }
 
 function req2(v, label, max) { return req(v, label, max); }
@@ -1164,6 +1221,7 @@ async function sweepChats() {
   }
   n += await sweepFollowUps();
   n += await sweepReportReminders();
+  n += await sweepBookingReminders();
   return n;
 }
 

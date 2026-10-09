@@ -315,6 +315,7 @@ const SCHEMA = [
   `ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS consult_time TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS followup_at TEXT DEFAULT ''`,
   `UPDATE enquiries SET consult_time = COALESCE(fields::json->>'time_of_consultation', '') WHERE consult_time = '' AND service <> '' AND fields LIKE '%time_of_consultation%'`,
   `ALTER TABLE chats ADD COLUMN IF NOT EXISTS slack_at TEXT DEFAULT ''`,
+  `ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS confirmed_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS reminder_at TEXT DEFAULT ''`,
   `CREATE TABLE IF NOT EXISTS contacts (
     id SERIAL PRIMARY KEY, email TEXT UNIQUE NOT NULL, first_name TEXT DEFAULT '', last_name TEXT DEFAULT '',
     tags TEXT DEFAULT '', status TEXT DEFAULT 'subscribed', source TEXT DEFAULT '', notes TEXT DEFAULT '',

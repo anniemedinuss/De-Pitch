@@ -28,7 +28,7 @@ export function layout(title, bodyHtml) {
   </table></td></tr></table></body></html>`;
 }
 
-export async function sendEmail({ to, subject, html, text, replyTo }) {
+export async function sendEmail({ to, subject, html, text, replyTo, from }) {
   if (!process.env.RESEND_API_KEY || !to) return false;
   try {
     const ctrl = new AbortController();
@@ -39,7 +39,7 @@ export async function sendEmail({ to, subject, html, text, replyTo }) {
       body: JSON.stringify({ from, to: [to], subject, html, text, reply_to: replyTo || undefined }),
       signal: ctrl.signal
     });
-    let r = await post(FROM());
+    let r = await post(from || FROM());
     // Until depitchhq.com is verified in Resend, fall back to Resend's test sender.
     // (That sender can only deliver to the email address the Resend account was created with.)
     if (!r.ok && (r.status === 403 || r.status === 422)) r = await post('Dé Pitch <onboarding@resend.dev>');

@@ -77,11 +77,31 @@
     var t = new Date(); t.setDate(t.getDate() + 1);
     inp.min = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
     var hint = document.createElement('p'); hint.className = 'small date-hint'; inp.insertAdjacentElement('afterend', hint);
-    var BASE = 'Monday to Friday, 11am to 3pm.';
+    // Slots are in Lagos time (WAT, UTC+1). Visitors elsewhere also see their own local time.
+    var tz = ''; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+    var tzField = form && form.querySelector('input[name="your_time_zone"]');
+    if (form && !tzField) { tzField = document.createElement('input'); tzField.type = 'hidden'; tzField.name = 'your_time_zone'; form.appendChild(tzField); }
+    if (tzField) tzField.value = tz;
+    function localLabel(day, hhmm) {
+      var at = new Date((day || new Date().toISOString().slice(0, 10)) + 'T' + hhmm + ':00+01:00');
+      if (isNaN(at)) return '';
+      if (at.getTimezoneOffset() === -60) return ''; // already Lagos time
+      var t = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      var sameDay = !day || at.getDate() === Number(day.slice(8, 10));
+      return t + (sameDay ? '' : ' ' + at.toLocaleDateString([], { weekday: 'short' })) + ' your time';
+    }
+    var away = localLabel('', '12:00') !== '';
+    var BASE = 'Monday to Friday, 11am to 3pm Lagos time.' + (away ? ' Your local time is shown beside each slot.' : '');
     hint.textContent = BASE;
     function loadSlots(day) {
       if (!timeSel) return;
-      Array.prototype.forEach.call(timeSel.options, function (o) { if (o.value) { o.dataset.label = o.dataset.label || o.textContent; o.disabled = false; o.textContent = o.dataset.label; } });
+      Array.prototype.forEach.call(timeSel.options, function (o) {
+        if (!o.value) return;
+        o.dataset.base = o.dataset.base || o.textContent;
+        var loc = localLabel(day, o.value);
+        o.dataset.label = o.dataset.base + (loc ? ' WAT (' + loc + ')' : '');
+        o.disabled = false; o.textContent = o.dataset.label;
+      });
       if (!day) return;
       fetch('/api/portal', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Portal': '1' }, body: JSON.stringify({ action: 'public.slots', date: day }) })
         .then(function (r) { return r.json(); }).then(function (j) {
@@ -101,6 +121,7 @@
       if (msg) inp.reportValidity(); else loadSlots(v);
     }
     inp.addEventListener('change', check);
+    loadSlots('');
   });
   document.querySelectorAll('form[data-form]').forEach(function (form) {
     var next = form.getAttribute('data-success') === 'newsletterreceived' ? 'youre-in.html' : 'thank-you.html';

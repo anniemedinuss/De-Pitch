@@ -660,10 +660,10 @@ async function admReviewLate(admin, b) {
 }
 
 /* Friday reminder: emails every active employee who has not yet sent this week's report.
-   Runs from the daily sweep, once per Friday (Lagos time), from 9am. */
+   Runs from the daily sweep, once per Friday, from 12pm Lagos time. */
 async function sweepReportReminders() {
   const n = lagosNow();
-  if (n.getUTCDay() !== 5 || n.getUTCHours() < 9) return 0;
+  if (n.getUTCDay() !== 5 || n.getUTCHours() < 12) return 0;
   const ws = currentWeekStart();
   const key = `report-reminder:${ws}`;
   const claimed = await one(`INSERT INTO reminders (key, sent_at) VALUES ($1,$2) ON CONFLICT (key) DO NOTHING RETURNING key`, [key, nowIso()]);
@@ -672,8 +672,8 @@ async function sweepReportReminders() {
   let sent = 0;
   for (const u of due) {
     const first = escapeHtml(String(u.name || '').split(' ')[0] || 'there');
-    const ok = await sendEmail({ to: u.email, subject: 'Reminder: your weekly report is due today', replyTo: ADMIN_EMAIL,
-      html: layout('Your weekly report is due today', `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">Friendly reminder: please submit this week's report on the Dé Pitch portal <b>today</b>.</p><p><a href="${assetBase()}/portal#/reports" style="display:inline-block;background:#011D38;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Submit my weekly report</a></p>`) });
+    const ok = await sendEmail({ to: u.email, subject: 'Reminder: submit your weekly report today', replyTo: ADMIN_EMAIL,
+      html: layout('Weekly report reminder', `<p style="font-size:15px;line-height:1.6">Hi ${first},</p><p style="font-size:15px;line-height:1.6">Just a reminder to make sure you submit your weekly report on the Dé Pitch portal <b>before your close of work today</b>.</p><p><a href="${assetBase()}/portal#/reports" style="display:inline-block;background:#011D38;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Submit my weekly report</a></p>`) });
     if (ok) sent++;
   }
   await query(`UPDATE reminders SET sent_count=$1 WHERE key=$2`, [sent, key]);

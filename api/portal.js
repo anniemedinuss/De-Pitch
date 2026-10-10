@@ -119,7 +119,6 @@ export default async function handler(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     const reqUrl = new URL(req.url, 'http://x');
-    if (reqUrl.searchParams.get('wa') === 'webhook') return await handleWaWebhook(req, res, reqUrl);
     if (reqUrl.searchParams.get('review')) return await handleReview(req, res, reqUrl);
     if (req.method === 'GET' && (reqUrl.searchParams.get('blog') || reqUrl.searchParams.get('sitemap') || /^\/scoop(\/|$)/.test(reqUrl.pathname))) return await handleBlog(req, res, reqUrl);
     if (reqUrl.searchParams.get('unsub') || reqUrl.searchParams.get('o') || reqUrl.searchParams.get('img')) return await handleMarketingGet(req, res, reqUrl);
@@ -127,8 +126,6 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const url = new URL(req.url, 'http://x');
       if (url.searchParams.get('task') === 'sweep') { const n = await sweepChats(); return send(res, 200, { ok: true, emailed: n }); }
-      const waMedia = int(url.searchParams.get('wa_media'));
-      if (waMedia) { const u = apiKeyValid(req) ? { role: 'admin' } : await currentUser(req); if (!u || u.role !== 'admin') return send(res, 401, { error: 'Please sign in.' }); return waMediaDownload(res, waMedia); }
       const fileId = int(url.searchParams.get('file'));
       if (!fileId) return send(res, 404, { error: 'Not found' });
       const viaKey = apiKeyValid(req);
@@ -491,7 +488,6 @@ async function admOverview() {
     (SELECT COUNT(*)::int FROM clients WHERE active = TRUE) AS clients,
     (SELECT COUNT(*)::int FROM enquiries WHERE status = 'new') AS enquiries,
     (SELECT COUNT(*)::int FROM chats WHERE status = 'open' AND last_visitor_msg > last_staff_msg) AS chats,
-    (SELECT COUNT(*)::int FROM wa_chats WHERE status = 'open' AND last_in_at > last_out_at) AS whatsapp,
     (SELECT COUNT(*)::int FROM referrals WHERE status = 'submitted') AS referrals,
     (SELECT COUNT(*)::int FROM points_claims WHERE status = 'pending') + (SELECT COUNT(*)::int FROM redemptions WHERE status = 'pending') AS points,
     (SELECT COUNT(*)::int FROM enquiries WHERE service <> '' AND consult_date = '' AND consult_done_at = '' AND paid_at = '' AND closed_at = '' AND done_at = '') +
@@ -1229,7 +1225,6 @@ async function sweepChats() {
   n += await sweepFollowUps();
   n += await sweepReportReminders();
   n += await sweepBookingReminders();
-  n += await sweepWhatsApp();
   return n;
 }
 
@@ -1339,162 +1334,6 @@ async function admUpdateRedemption(admin, b) {
   await query(`UPDATE redemptions SET status = $1, hr_note = $2, updated_at = $3 WHERE id = $4`, [status, str(b.hr_note, 500), nowIso(), r.id]);
   return { ok: true };
 }
-
-/* ================= WhatsApp (Meta WhatsApp Business Platform, Cloud API) =================
-   Messages to the Dé Pitch WhatsApp number arrive at /api/portal?wa=webhook and show in the portal
-   under WhatsApp; replies are sent from there. Vercel settings:
-   WA_TOKEN (permanent access token), WA_PHONE_ID (phone number ID), WA_VERIFY_TOKEN (any secret word,
-   also typed into Meta's webhook settings), WA_APP_SECRET (the Meta app secret, to check messages are real). */
-const WA_BASE = () => (process.env.WA_API_BASE || 'https://graph.facebook.com') + '/' + (process.env.WA_API_VERSION || 'v23.0');
-const waReady = () => !!(process.env.WA_TOKEN && process.env.WA_PHONE_ID);
-const WA_WINDOW_MS = 24 * 3600000;
-async function waApi(path, payload) {
-  const r = await fetch(`${WA_BASE()}/${path}`, { method: payload ? 'POST' : 'GET', headers: { Authorization: `Bearer ${process.env.WA_TOKEN}`, ...(payload ? { 'Content-Type': 'application/json' } : {}) }, body: payload ? JSON.stringify(payload) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error((j.error && (j.error.error_user_msg || j.error.message)) || `WhatsApp error ${r.status}`); e.code = j.error && j.error.code; throw e; }
-  return j;
-}
-async function readRaw(req) {
-  const chunks = []; let size = 0;
-  for await (const c of req) { size += c.length; if (size > 2 * 1024 * 1024) break; chunks.push(c); }
-  return Buffer.concat(chunks).toString('utf8');
-}
-async function handleWaWebhook(req, res, url) {
-  if (req.method === 'GET') {
-    const ok = url.searchParams.get('hub.mode') === 'subscribe' && process.env.WA_VERIFY_TOKEN && url.searchParams.get('hub.verify_token') === process.env.WA_VERIFY_TOKEN;
-    res.statusCode = ok ? 200 : 403; res.setHeader('Content-Type', 'text/plain');
-    return res.end(ok ? String(url.searchParams.get('hub.challenge') || '') : 'Forbidden');
-  }
-  if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' });
-  const raw = await readRaw(req);
-  const secret = process.env.WA_APP_SECRET;
-  if (secret) {
-    const sig = String(req.headers['x-hub-signature-256'] || '');
-    const want = 'sha256=' + crypto.createHmac('sha256', secret).update(raw, 'utf8').digest('hex');
-    if (sig.length !== want.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want))) return send(res, 401, { error: 'Bad signature' });
-  }
-  const body = json(raw, {});
-  try {
-    for (const entry of body.entry || []) for (const ch of entry.changes || []) {
-      const v = ch.value || {};
-      const names = Object.fromEntries((v.contacts || []).map((c) => [c.wa_id, (c.profile && c.profile.name) || '']));
-      for (const m of v.messages || []) await waStoreIncoming(m, names[m.from] || '');
-      for (const s of v.statuses || []) {
-        await query(`UPDATE wa_messages SET status = $1, error = $2 WHERE wa_msg_id = $3`, [str(s.status, 20), str(s.errors && s.errors[0] && (s.errors[0].title || s.errors[0].message), 300), str(s.id, 200)]);
-      }
-    }
-  } catch (e) { console.error('wa webhook', e.message); }
-  return send(res, 200, { ok: true });
-}
-async function waStoreIncoming(m, name) {
-  const waId = str(m.from, 40);
-  if (!waId) return;
-  if (await one(`SELECT id FROM wa_messages WHERE wa_msg_id = $1`, [str(m.id, 200)])) return; // Meta can deliver twice
-  const at = m.timestamp ? new Date(Number(m.timestamp) * 1000).toISOString() : nowIso();
-  let chat = await one(`SELECT * FROM wa_chats WHERE wa_id = $1`, [waId]);
-  if (!chat) chat = await one(`INSERT INTO wa_chats (wa_id, name, created_at) VALUES ($1,$2,$3) RETURNING *`, [waId, str(name, 120), nowIso()]);
-  else if (name && name !== chat.name) await query(`UPDATE wa_chats SET name = $1 WHERE id = $2`, [str(name, 120), chat.id]);
-  const t = str(m.type, 30);
-  const part = m[t] || {};
-  let text = '';
-  if (t === 'text') text = part.body;
-  else if (t === 'button') text = part.text;
-  else if (t === 'interactive') text = (part.button_reply && part.button_reply.title) || (part.list_reply && part.list_reply.title) || '';
-  else if (t === 'location') text = `Location: ${part.name || ''} ${part.address || ''} (${part.latitude}, ${part.longitude})`.trim();
-  else if (t === 'contacts') text = 'Shared a contact: ' + ((m.contacts || []).map((c) => c.name && c.name.formatted_name).filter(Boolean).join(', ') || '');
-  else text = part.caption || '';
-  await query(`INSERT INTO wa_messages (chat_id, direction, wa_msg_id, type, body, media_id, filename, created_at) VALUES ($1,'in',$2,$3,$4,$5,$6,$7)`,
-    [chat.id, str(m.id, 200), t, str(text, 4000), str(part.id, 200), str(part.filename, 200), at]);
-  await query(`UPDATE wa_chats SET last_in_at = $1, status = 'open' WHERE id = $2`, [at, chat.id]);
-}
-async function admWaChats() {
-  const rows = await query(`SELECT c.*,
-      (SELECT CASE WHEN m.body <> '' THEN m.body ELSE '[' || m.type || ']' END FROM wa_messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_body,
-      (SELECT COUNT(*)::int FROM wa_messages m WHERE m.chat_id = c.id AND m.direction = 'in' AND m.created_at > c.staff_read) AS unread
-    FROM wa_chats c ORDER BY (c.status = 'open') DESC, GREATEST(c.last_in_at, c.last_out_at) DESC LIMIT 300`);
-  return { rows, connected: waReady() };
-}
-async function admWaChat(admin, b) {
-  const c = await one(`SELECT * FROM wa_chats WHERE id = $1`, [int(b.id)]);
-  if (!c) fail(404, 'Chat not found.');
-  await query(`UPDATE wa_chats SET staff_read = $1 WHERE id = $2`, [nowIso(), c.id]);
-  const messages = await query(`SELECT id, direction, type, body, media_id, filename, status, error, created_at FROM wa_messages WHERE chat_id = $1 AND id > $2 ORDER BY id LIMIT 500`, [c.id, int(b.after)]);
-  // Blue ticks: tell WhatsApp we've read their latest message.
-  const lastIn = await one(`SELECT wa_msg_id FROM wa_messages WHERE chat_id = $1 AND direction = 'in' ORDER BY id DESC LIMIT 1`, [c.id]);
-  if (waReady() && lastIn && !b.after) waApi(`${process.env.WA_PHONE_ID}/messages`, { messaging_product: 'whatsapp', status: 'read', message_id: lastIn.wa_msg_id }).catch(() => {});
-  const open = !!c.last_in_at && Date.now() - Date.parse(c.last_in_at) < WA_WINDOW_MS;
-  return { chat: c, messages, windowOpen: open, windowEnds: open ? new Date(Date.parse(c.last_in_at) + WA_WINDOW_MS).toISOString() : '', connected: waReady() };
-}
-async function waSaveOut(c, admin, type, body, res) {
-  const at = nowIso();
-  await query(`INSERT INTO wa_messages (chat_id, direction, wa_msg_id, type, body, status, staff_id, created_at) VALUES ($1,'out',$2,$3,$4,'sent',$5,$6)`,
-    [c.id, str(res && res.messages && res.messages[0] && res.messages[0].id, 200), type, body, admin.id || null, at]);
-  await query(`UPDATE wa_chats SET last_out_at = $1, staff_read = $1 WHERE id = $2`, [at, c.id]);
-}
-async function admWaReply(admin, b) {
-  if (!waReady()) fail(400, 'WhatsApp is not connected yet. Add WA_TOKEN and WA_PHONE_ID in Vercel.');
-  const c = await one(`SELECT * FROM wa_chats WHERE id = $1`, [int(b.id)]);
-  if (!c) fail(404, 'Chat not found.');
-  const text = req(b.message, 'Reply', 4000);
-  if (!c.last_in_at || Date.now() - Date.parse(c.last_in_at) >= WA_WINDOW_MS) fail(400, 'It has been more than 24 hours since their last message, so WhatsApp only allows an approved template. Use "Send a template" below.');
-  const r = await waApi(`${process.env.WA_PHONE_ID}/messages`, { messaging_product: 'whatsapp', recipient_type: 'individual', to: c.wa_id, type: 'text', text: { body: text, preview_url: true } });
-  await waSaveOut(c, admin, 'text', text, r);
-  return { ok: true };
-}
-async function admWaTemplate(admin, b) {
-  if (!waReady()) fail(400, 'WhatsApp is not connected yet. Add WA_TOKEN and WA_PHONE_ID in Vercel.');
-  const name = req(b.template, 'Template name', 120).replace(/[^a-z0-9_]/gi, '').toLowerCase();
-  const lang = str(b.language, 10) || 'en';
-  let c = b.id ? await one(`SELECT * FROM wa_chats WHERE id = $1`, [int(b.id)]) : null;
-  if (!c && b.to) {
-    const to = String(b.to).replace(/\D/g, '');
-    if (to.length < 8) fail(400, 'Enter the number with its country code, e.g. 2348012345678.');
-    c = (await one(`SELECT * FROM wa_chats WHERE wa_id = $1`, [to])) || (await one(`INSERT INTO wa_chats (wa_id, name, created_at) VALUES ($1,$2,$3) RETURNING *`, [to, str(b.name, 120), nowIso()]));
-  }
-  if (!c) fail(404, 'Chat not found.');
-  const r = await waApi(`${process.env.WA_PHONE_ID}/messages`, { messaging_product: 'whatsapp', to: c.wa_id, type: 'template', template: { name, language: { code: lang } } });
-  await waSaveOut(c, admin, 'template', `Template: ${name}`, r);
-  return { ok: true, id: c.id };
-}
-async function admWaStatus(admin, b) {
-  await query(`UPDATE wa_chats SET status = $1 WHERE id = $2`, [b.status === 'closed' ? 'closed' : 'open', int(b.id)]);
-  return { ok: true };
-}
-async function waMediaDownload(res, id) {
-  const m = await one(`SELECT media_id, type, filename FROM wa_messages WHERE id = $1`, [id]);
-  if (!m || !m.media_id || !waReady()) return send(res, 404, { error: 'Not found' });
-  try {
-    const meta = await waApi(m.media_id);
-    const r = await fetch(meta.url, { headers: { Authorization: `Bearer ${process.env.WA_TOKEN}` } });
-    if (!r.ok) return send(res, 502, { error: 'WhatsApp did not return the file. It may have expired.' });
-    const buf = Buffer.from(await r.arrayBuffer());
-    res.statusCode = 200;
-    res.setHeader('Content-Type', meta.mime_type || 'application/octet-stream');
-    res.setHeader('Cache-Control', 'private, max-age=3600');
-    if (m.filename) res.setHeader('Content-Disposition', `inline; filename="${m.filename.replace(/["\r\n]/g, '')}"`);
-    return res.end(buf);
-  } catch (e) { return send(res, 502, { error: e.message }); }
-}
-// Unanswered WhatsApp messages go to Slack once, after 15 minutes.
-async function sweepWhatsApp() {
-  if (!followupHook()) return 0;
-  const cutoff = new Date(Date.now() - 15 * 60000).toISOString();
-  const due = await query(`SELECT * FROM wa_chats WHERE status = 'open' AND last_in_at > last_out_at AND last_in_at < $1 AND slack_at < last_in_at ORDER BY id LIMIT 5`, [cutoff]);
-  let n = 0;
-  for (const c of due) {
-    await query(`UPDATE wa_chats SET slack_at = $1 WHERE id = $2`, [nowIso(), c.id]);
-    const msgs = (await query(`SELECT direction, body, type FROM wa_messages WHERE chat_id = $1 ORDER BY id DESC LIMIT 8`, [c.id])).reverse();
-    const transcript = msgs.map((m) => `${m.direction === 'in' ? (c.name || '+' + c.wa_id) : 'Dé Pitch'}: ${m.body || '[' + m.type + ']'}`).join('\n');
-    await postSlackFollowup(`Follow up: unanswered WhatsApp from ${c.name || '+' + c.wa_id}`, [
-      { type: 'header', text: { type: 'plain_text', text: 'WhatsApp message waiting' } },
-      { type: 'section', text: { type: 'mrkdwn', text: `*From:* ${c.name || ''} (+${c.wa_id})\n\n${transcript.slice(-2500)}` } },
-      { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Reply in the portal' }, url: `${assetBase()}/portal#/whatsapp` }] }
-    ]);
-    n++;
-  }
-  return n;
-}
-
 async function admChats(admin, b) {
   const rows = await query(`SELECT c.id, c.name, c.email, c.page, c.status, c.last_visitor_msg, c.last_staff_msg, c.visitor_seen, c.staff_read, c.created_at,
       (SELECT body FROM chat_messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_body,
@@ -2175,7 +2014,6 @@ const ACTIONS = {
   'emp.referrals': empReferrals, 'emp.submitReferral': empSubmitReferral,
   'adm.enquiries': admEnquiries, 'adm.enquiryStatus': admEnquiryStatus, 'adm.enquiryFollowUp': admEnquiryFollowUp, 'adm.referrals': admReferrals, 'adm.updateReferral': admUpdateReferral,
   'adm.points': admPoints, 'adm.reviewClaim': admReviewClaim, 'adm.awardPoints': admAwardPoints, 'adm.updateRedemption': admUpdateRedemption,
-  'adm.waChats': admWaChats, 'adm.waChat': admWaChat, 'adm.waReply': admWaReply, 'adm.waTemplate': admWaTemplate, 'adm.waStatus': admWaStatus,
   'adm.chats': admChats, 'adm.chat': admChat, 'adm.chatReply': admChatReply, 'adm.chatStatus': admChatStatus, 'adm.services': admServices, 'adm.saveService': admSaveService, 'adm.deleteService': admDeleteService, 'adm.settings': admSettings, 'adm.testPointsEmail': admTestPointsEmail,
   'adm.announcements': admAnnouncements, 'adm.saveAnnouncement': admSaveAnnouncement, 'adm.deleteAnnouncement': admDeleteAnnouncement
 };

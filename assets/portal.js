@@ -1529,10 +1529,11 @@
               Object.keys(r.fields).map(function (k) { return '<dt>' + esc(cap(k.replace(/[-_]/g, ' '))) + '</dt><dd>' + esc(r.fields[k]) + '</dd>'; }).join('') +
               (r.file_id ? '<dt>File</dt><dd>' + fileLink(r.file_id, r.filename || 'Open file') + '</dd>' : '') + (r.page ? '<dt>Page</dt><dd>' + esc(r.page) + '</dd>' : '') + '</dl>' +
               '<p class="small muted">' + (r.followup_at ? 'Sent to De Pitch admin on Slack for follow-up on ' + esc(fmtDate(r.followup_at)) + '.' : 'Enquiries sent after hours, or not handled within 2 hours, go to De Pitch admin on Slack automatically.') + '</p>',
-            foot: '<button class="btn secondary" id="enq-slack" type="button" style="margin-right:auto">' + (r.followup_at ? 'Send to Slack again' : 'Send to De Pitch admin on Slack') + '</button><button class="btn secondary" data-close type="button">Close</button>' + (r.status === 'new' ? '<button class="btn ok" id="enq-done" type="button">Mark as handled</button>' : '<button class="btn secondary" id="enq-new" type="button">Move back to new</button>')
+            foot: '<button class="btn secondary" id="enq-slack" type="button" style="margin-right:auto">' + (r.followup_at ? 'Send to Slack again' : 'Send to De Pitch admin on Slack') + '</button><button class="btn danger" id="enq-del" type="button">Delete</button><button class="btn secondary" data-close type="button">Close</button>' + (r.status === 'new' ? '<button class="btn ok" id="enq-done" type="button">Mark as handled</button>' : '<button class="btn secondary" id="enq-new" type="button">Move back to new</button>')
           });
           var bt = $('#enq-done', m) || $('#enq-new', m);
           bt.onclick = function () { api('adm.enquiryStatus', { id: r.id, status: r.status === 'new' ? 'handled' : 'new' }).then(after('Updated.')); };
+          $('#enq-del', m).onclick = function () { if (!window.confirm('Delete this enquiry from ' + (r.name || r.email || 'the website') + '? This cannot be undone.')) return; api('adm.deleteEnquiry', { id: r.id }).then(after('Enquiry deleted.')).catch(function (x) { toast(x.message, true); }); };
           $('#enq-slack', m).onclick = function () { var me = this; busy(me, true, 'Sending…'); api('adm.enquiryFollowUp', { id: r.id }).then(after('Sent to Slack for follow-up.')).catch(function (x) { busy(me, false); toast(x.message, true); }); };
         };
       });

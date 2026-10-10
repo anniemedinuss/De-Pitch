@@ -316,6 +316,14 @@ const SCHEMA = [
   `UPDATE enquiries SET consult_time = COALESCE(fields::json->>'time_of_consultation', '') WHERE consult_time = '' AND service <> '' AND fields LIKE '%time_of_consultation%'`,
   `ALTER TABLE chats ADD COLUMN IF NOT EXISTS slack_at TEXT DEFAULT ''`,
   `ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS confirmed_at TEXT DEFAULT '', ADD COLUMN IF NOT EXISTS reminder_at TEXT DEFAULT ''`,
+  `CREATE TABLE IF NOT EXISTS wa_chats (
+    id SERIAL PRIMARY KEY, wa_id TEXT UNIQUE NOT NULL, name TEXT DEFAULT '', status TEXT DEFAULT 'open',
+    last_in_at TEXT DEFAULT '', last_out_at TEXT DEFAULT '', staff_read TEXT DEFAULT '', slack_at TEXT DEFAULT '', created_at TEXT DEFAULT '')`,
+  `CREATE TABLE IF NOT EXISTS wa_messages (
+    id SERIAL PRIMARY KEY, chat_id INTEGER NOT NULL, direction TEXT NOT NULL, wa_msg_id TEXT DEFAULT '', type TEXT DEFAULT 'text',
+    body TEXT DEFAULT '', media_id TEXT DEFAULT '', filename TEXT DEFAULT '', status TEXT DEFAULT '', error TEXT DEFAULT '',
+    staff_id INTEGER, created_at TEXT DEFAULT '')`,
+  `CREATE INDEX IF NOT EXISTS wa_messages_chat_idx ON wa_messages (chat_id)`,
   `CREATE TABLE IF NOT EXISTS contacts (
     id SERIAL PRIMARY KEY, email TEXT UNIQUE NOT NULL, first_name TEXT DEFAULT '', last_name TEXT DEFAULT '',
     tags TEXT DEFAULT '', status TEXT DEFAULT 'subscribed', source TEXT DEFAULT '', notes TEXT DEFAULT '',

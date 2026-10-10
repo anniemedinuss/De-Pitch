@@ -309,7 +309,7 @@
   var NAV = {
     employee: [['overview', 'Overview', 'overview'], ['pay', 'Pay & payslips', 'pay'], ['reports', 'Weekly reports', 'reports'], ['requests', 'Requests', 'requests'], ['referrals', 'Referrals', 'referrals'], ['documents', 'Documents', 'documents']],
     client: [['overview', 'Overview', 'overview'], ['talents', 'Your talents', 'talents'], ['invoices', 'Invoices', 'invoices'], ['recruitment', 'Request talent', 'recruitment'], ['documents', 'Documents', 'documents']],
-    admin: [['inbox', 'Inbox', 'inbox'], ['chat', 'Live chat', 'chats'], ['services', 'Services', 'services'], ['enquiries', 'Website enquiries', 'enquiries'], ['people', 'People'], ['clients', 'Clients'], ['payroll', 'Payroll', 'payroll_pending'], ['invoices', 'Invoices', 'invoices_draft'],
+    admin: [['inbox', 'Inbox', 'inbox'], ['chat', 'Live chat', 'chats'], ['whatsapp', 'WhatsApp', 'whatsapp'], ['services', 'Services', 'services'], ['enquiries', 'Website enquiries', 'enquiries'], ['people', 'People'], ['clients', 'Clients'], ['payroll', 'Payroll', 'payroll_pending'], ['invoices', 'Invoices', 'invoices_draft'],
       ['reports', 'Weekly reports', 'reports'], ['requests', 'Requests', 'requests'], ['recruitment', 'Talent requests', 'recruitment'],
       ['feedback', 'Reviews & removals', 'feedback'], ['referrals', 'Referrals', 'referrals'], ['points', 'Points & rewards', 'points'], ['documents', 'Documents'], ['announcements', 'Announcements'], ['campaigns', 'Email campaigns'], ['audience', 'Email audience']],
     media: [['blog', 'Blog'], ['campaigns', 'Email campaigns'], ['audience', 'Audience']]
@@ -1701,6 +1701,91 @@
         }, 6000);
       }
       tick();
+    });
+  };
+
+
+  /* ================= admin: WhatsApp inbox ================= */
+  var waTimer = null;
+  ADM.whatsapp = function (el) {
+    clearTimeout(waTimer);
+    var openId = Number(sessionStorage.getItem('dp_wa_open') || 0);
+    var lastMsg = 0;
+    function when(t) { return esc(fmtDate(t)) + ' ' + esc(new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); }
+    function tick(st) { return st === 'read' ? ' · read' : st === 'delivered' ? ' · delivered' : st === 'failed' ? ' · not delivered' : ''; }
+    return api('adm.waChats').then(function (j) {
+      el.innerHTML = head('WhatsApp', 'Messages sent to the Dé Pitch WhatsApp number. Reply here and it goes to their WhatsApp. Messages waiting 15 minutes go to Slack.') +
+        (j.connected ? '' : '<div class="remind warn"><span class="tag">Not connected</span><span>WhatsApp isn’t connected yet. Once the Meta WhatsApp settings are added in Vercel, messages appear here.</span></div>') +
+        '<div class="row" style="justify-content:flex-end;margin:10px 0"><button class="btn sm secondary" id="wa-new" type="button">Message a new number</button></div>' +
+        '<div class="chat-admin"><div class="chat-list panel" id="wl"></div><div class="chat-view panel" id="wv"><p class="empty">Choose a conversation.</p></div></div>';
+      function templateModal(chatId) {
+        var m = openModal({ title: chatId ? 'Send a template' : 'Message a new number',
+          body: '<p class="small muted">WhatsApp only lets businesses start a conversation, or write after 24 hours of silence, with a template Meta has approved. Once they reply, you can chat freely for 24 hours.</p>' +
+            (chatId ? '' : '<label class="field">WhatsApp number with country code<input id="wt-to" placeholder="2348012345678"></label><label class="field">Name (optional)<input id="wt-name"></label>') +
+            '<label class="field">Template name (as approved in Meta)<input id="wt-name-t" value="hello_world"></label><label class="field">Language code<input id="wt-lang" value="en_US"></label><p class="error" id="wt-err"></p>',
+          foot: '<button class="btn secondary" data-close type="button">Cancel</button><button class="btn" id="wt-send" type="button">Send</button>' });
+        $('#wt-send', m).onclick = function () {
+          var b = this; busy(b, true, 'Sending…');
+          api('adm.waTemplate', { id: chatId || 0, to: chatId ? '' : $('#wt-to', m).value, name: chatId ? '' : $('#wt-name', m).value, template: $('#wt-name-t', m).value, language: $('#wt-lang', m).value })
+            .then(function (r) { closeModal(); toast('Template sent.'); openId = r.id; sessionStorage.setItem('dp_wa_open', openId); renderShell(); })
+            .catch(function (x) { $('#wt-err', m).textContent = x.message; busy(b, false); });
+        };
+      }
+      $('#wa-new', el).onclick = function () { templateModal(0); };
+      function drawList(rows) {
+        $('#wl', el).innerHTML = rows.length ? rows.map(function (c) {
+          var waiting = c.last_in_at > c.last_out_at && c.status === 'open';
+          return '<button type="button" class="chat-item' + (c.id === openId ? ' on' : '') + '" data-id="' + c.id + '"><span class="spread"><b>' + esc(c.name || ('+' + c.wa_id)) + '</b>' + (c.unread ? '<span class="count">' + c.unread + '</span>' : (waiting ? pill('pending', 'waiting') : (c.status === 'closed' ? pill('closed') : ''))) + '</span>' +
+            '<span class="small muted">+' + esc(c.wa_id) + '</span><span class="small">' + esc((c.last_body || '').slice(0, 70)) + '</span></button>';
+        }).join('') : '<p class="empty">No WhatsApp messages yet.</p>';
+        $$('.chat-item', $('#wl', el)).forEach(function (b) { b.onclick = function () { openId = Number(b.getAttribute('data-id')); sessionStorage.setItem('dp_wa_open', openId); lastMsg = 0; drawList(rows); loadChat(true); }; });
+      }
+      function bodyHtml(msg) {
+        var media = msg.media_id ? '/api/portal?wa_media=' + msg.id : '';
+        if (msg.type === 'image' && media) return '<a href="' + media + '" target="_blank" rel="noopener"><img src="' + media + '" alt="Image from WhatsApp" style="max-width:240px;border-radius:8px;display:block"></a>' + (msg.body ? '<p>' + esc(msg.body) + '</p>' : '');
+        if (media) return '<p><a href="' + media + '" target="_blank" rel="noopener">' + esc(msg.filename || ('Open ' + msg.type)) + '</a>' + (msg.body ? '<br>' + esc(msg.body) : '') + '</p>';
+        return '<p>' + esc(msg.body || ('[' + msg.type + ']')) + '</p>';
+      }
+      function loadChat(full) {
+        if (!openId) return Promise.resolve();
+        return api('adm.waChat', { id: openId, after: full ? 0 : lastMsg }).then(function (c) {
+          var wv = $('#wv', el); if (!wv) return;
+          if (full || !$('.chat-thread', wv)) {
+            wv.innerHTML = '<div class="spread"><div><b>' + esc(c.chat.name || ('+' + c.chat.wa_id)) + '</b> <span class="small muted">+' + esc(c.chat.wa_id) + '</span><div class="small muted" id="wv-win"></div></div>' +
+              '<div class="row"><a class="btn sm secondary" href="https://wa.me/' + esc(c.chat.wa_id) + '" target="_blank" rel="noopener">Open in WhatsApp</a><button class="btn sm secondary" id="wv-close" type="button">' + (c.chat.status === 'closed' ? 'Reopen' : 'Mark as done') + '</button></div></div>' +
+              '<div class="chat-thread" id="wt"></div><form id="wv-form" class="chat-reply"><textarea id="wv-msg" rows="2" placeholder="Write a reply" aria-label="Reply" required></textarea><button class="btn" type="submit">Send</button></form>' +
+              '<p class="small" style="margin-top:8px"><button class="btn sm secondary" id="wv-tpl" type="button">Send a template</button></p>';
+            $('#wv-close', wv).onclick = function () { api('adm.waStatus', { id: openId, status: c.chat.status === 'closed' ? 'open' : 'closed' }).then(function () { renderShell(); }); };
+            $('#wv-tpl', wv).onclick = function () { templateModal(openId); };
+            $('#wv-msg', wv).addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#wv-form button', wv).click(); } });
+            $('#wv-form', wv).onsubmit = function (e) {
+              e.preventDefault(); var ta = $('#wv-msg', wv), btn = this.querySelector('button'); if (!ta.value.trim()) return; busy(btn, true, 'Sending…');
+              api('adm.waReply', { id: openId, message: ta.value }).then(function () { ta.value = ''; return loadChat(false); })
+                .catch(function (x) { toast(x.message, true); }).finally(function () { busy(btn, false); ta.focus(); });
+            };
+          }
+          var win = $('#wv-win', wv);
+          win.textContent = c.windowOpen ? 'You can reply freely until ' + fmtDate(c.windowEnds) + ' ' + new Date(c.windowEnds).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'More than 24 hours since their last message: send a template to restart the chat.';
+          $('#wv-form', wv).style.display = c.windowOpen ? '' : 'none';
+          var wt = $('#wt', wv);
+          c.messages.forEach(function (msg) {
+            if (msg.id <= lastMsg) return; lastMsg = msg.id;
+            var d = document.createElement('div');
+            d.className = 'bubble ' + (msg.direction === 'out' ? 'me' : 'them');
+            d.innerHTML = '<span class="small">' + (msg.direction === 'out' ? 'Dé Pitch' : esc(c.chat.name || ('+' + c.chat.wa_id))) + ' · ' + when(msg.created_at) + (msg.direction === 'out' ? tick(msg.status) : '') + '</span>' + bodyHtml(msg) + (msg.error ? '<span class="small">' + esc(msg.error) + '</span>' : '');
+            wt.appendChild(d);
+          });
+          wt.scrollTop = wt.scrollHeight;
+        });
+      }
+      drawList(j.rows);
+      loadChat(true);
+      (function poll() {
+        waTimer = setTimeout(function () {
+          if (currentTab() !== 'whatsapp' || !$('#wl', el)) return;
+          Promise.all([api('adm.waChats'), loadChat(false)]).then(function (r) { if ($('#wl', el)) drawList(r[0].rows); refreshCounts(); }).finally(poll);
+        }, 6000);
+      })();
     });
   };
 

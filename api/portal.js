@@ -1253,6 +1253,10 @@ async function admDeleteService(admin, b) {
   await query(`DELETE FROM enquiries WHERE id = $1 AND service <> ''`, [int(b.id)]);
   return { ok: true };
 }
+async function admDeleteEnquiry(admin, b) {
+  await query(`DELETE FROM enquiries WHERE id = $1`, [int(b.id)]);
+  return { ok: true };
+}
 async function admEnquiryStatus(admin, b) {
   await query(`UPDATE enquiries SET status = $1 WHERE id = $2`, [b.status === 'handled' ? 'handled' : 'new', int(b.id)]);
   return { ok: true };
@@ -2000,7 +2004,7 @@ const ACTIONS = {
   'adm.resetPassword': admResetPassword, 'adm.clients': admClients, 'adm.saveClient': admSaveClient,
   'adm.payroll': admPayroll, 'adm.generatePayroll': admGeneratePayroll, 'adm.savePayroll': admSavePayroll,
   'adm.markPaid': admMarkPaid, 'adm.deletePayroll': admDeletePayroll, 'adm.payslip': admEmployeePayslip,
-  'adm.reports': admReports, 'adm.reviewReport': admReviewReport, 'adm.importReports': admImportReports, 'adm.lateExcuses': admLateExcuses, 'adm.reviewLate': admReviewLate,
+  'adm.reports': admReports, 'adm.reviewReport': admReviewReport, 'adm.importReports': admImportReports, 'adm.deleteEnquiry': admDeleteEnquiry, 'adm.lateExcuses': admLateExcuses, 'adm.reviewLate': admReviewLate,
   'adm.requests': admRequests, 'adm.reviewRequest': admReviewRequest,
   'adm.invoices': admInvoices, 'adm.invoice': admInvoice, 'adm.draftInvoice': admDraftInvoice, 'adm.saveInvoice': admSaveInvoice,
   'adm.invoiceStatus': admInvoiceStatus, 'adm.deleteInvoice': admDeleteInvoice,
